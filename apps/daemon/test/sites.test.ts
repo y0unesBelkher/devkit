@@ -4,7 +4,15 @@ import { parseIpAddr } from '../src/sites/network.ts';
 import { renderListen, renderStaticVhost } from '../src/sites/nginx.ts';
 import { Store } from '../src/store.ts';
 
-const site: Site = { id: '1', domain: 'hello.test', root: '/home/dev/hello', type: 'static', createdAt: 1 };
+const site: Site = {
+  id: '1',
+  domain: 'hello.test',
+  root: '/home/dev/hello',
+  docroot: '/home/dev/hello',
+  type: 'static',
+  phpVersion: null,
+  createdAt: 1,
+};
 
 describe('validateDomain', () => {
   test.each(['hello.test', 'lv-oms.test', 'a.test', 'app2.test'])('accepts %s', (domain) => {

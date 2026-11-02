@@ -115,8 +115,8 @@ import { ServicesStore } from '../core/services-store';
             </div>
             <div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
               <div class="text-xs text-zinc-500">Windows PATH in WSL</div>
-              <div class="mt-1 font-medium" [class.text-amber-300]="sys.windowsPathAppended">
-                {{ sys.windowsPathAppended ? 'Appended (EnvKit php may leak)' : 'Disabled' }}
+              <div class="mt-1 font-medium" [class.text-amber-300]="sys.windowsPathAppended && !sys.phpShim">
+                {{ !sys.windowsPathAppended ? 'Disabled' : sys.phpShim ? 'Appended (DevKit php comes first)' : 'Appended (Windows php may win)' }}
               </div>
             </div>
           </section>

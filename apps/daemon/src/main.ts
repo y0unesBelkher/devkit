@@ -4,6 +4,7 @@ import { loadConfig, paths } from './config.ts';
 import { Hub, type SocketData } from './hub.ts';
 import { JobQueue } from './jobs.ts';
 import { createFetch } from './server.ts';
+import { syncPhpShim } from './sites/php-shim.ts';
 import { syncNetwork } from './sites/sites.ts';
 import { Store } from './store.ts';
 
@@ -34,6 +35,8 @@ const server = Bun.serve<SocketData>({
 });
 
 console.log(`devkitd ${DAEMON_VERSION} listening on ${server.url} (project user: ${config.user})`);
+
+syncPhpShim(store.listSites());
 
 // WSL gets a new IP on every restart; point nginx at it before anyone opens a site.
 syncNetwork(store).then(

@@ -58,6 +58,7 @@ export async function getSystemInfo(config: DaemonConfig, startedAt: number): Pr
     systemd: pid1 === 'systemd',
     user: config.user,
     windowsPathAppended: parseAppendWindowsPath(readOr('/etc/wsl.conf', '')),
+    phpShim: readOr('/usr/local/bin/php', '').includes('Managed by DevKit'),
     packagesNeedingRepair: packagesNeedingRepairCount,
   };
 }

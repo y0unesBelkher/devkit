@@ -25,7 +25,13 @@ export function renderListen(mode: ListenMode, ip: string | null): { http: strin
   return { http: `${header}listen ${ip}:80;\n`, https: `${header}listen ${ip}:443 ssl http2;\n` };
 }
 
-export function renderStaticVhost(site: Site, cert: { cert: string; key: string }): string {
+interface CertPaths {
+  cert: string;
+  key: string;
+}
+
+/** Shared wrapper: HTTP→HTTPS redirect plus the TLS server with `body` inside. */
+function serverBlocks(site: Site, cert: CertPaths, body: string): string {
   const { domain } = site;
   return `# Managed by DevKit - edits are overwritten.
 server {
@@ -41,18 +47,56 @@ server {
     ssl_certificate ${cert.cert};
     ssl_certificate_key ${cert.key};
 
-    root "${site.root}";
-    index index.html index.htm;
+    root "${site.docroot}";
     charset utf-8;
 
     access_log /var/log/nginx/${domain}-access.log;
     error_log /var/log/nginx/${domain}-error.log;
+${body}}
+`;
+}
+
+export function renderStaticVhost(site: Site, cert: CertPaths): string {
+  return serverBlocks(
+    site,
+    cert,
+    `    index index.html index.htm;
 
     location / {
         try_files $uri $uri/ =404;
     }
+`,
+  );
 }
-`;
+
+/** PHP and Laravel: front controller routing to the per-version DevKit FPM pool. */
+export function renderPhpVhost(site: Site, cert: CertPaths, fpmSocket: string): string {
+  return serverBlocks(
+    site,
+    cert,
+    `    index index.php index.html;
+    client_max_body_size 100M;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    location ~ \\.php$ {
+        fastcgi_pass unix:${fpmSocket};
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_hide_header X-Powered-By;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ /\\.(?!well-known).* {
+        deny all;
+    }
+`,
+  );
 }
 
 export function nginxInstalled(): boolean {

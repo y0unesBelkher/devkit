@@ -4,14 +4,19 @@ import {
   SITE_TLD,
   validateDomain,
   type ActionResult,
+  type CreateSiteRequest,
+  type CreateSiteResponse,
+  type DetectResult,
   type ListenMode,
+  type ServicesResponse,
   type Site,
+  type SiteType,
   type SitesResponse,
   type WindowsStatus,
 } from '@devkit/shared';
 import { Daemon } from '../core/daemon';
 
-type Busy = null | 'load' | 'create' | 'delete' | 'trust' | 'hosts' | 'mode';
+type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' | 'hosts' | 'mode';
 
 @Component({
   selector: 'app-sites',
@@ -93,25 +98,74 @@ type Busy = null | 'load' | 'create' | 'delete' | 'trust' | 'hosts' | 'mode';
       }
 
       <!-- Add site -->
-      <form class="mt-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4" (ngSubmit)="create()">
-        <h2 class="text-sm font-medium">Add a static site</h2>
-        <div class="mt-3 grid gap-3 md:grid-cols-[1fr_2fr_auto]">
-          <label class="text-xs text-zinc-400">
-            Domain
-            <input class="input mt-1" name="domain" [(ngModel)]="domain" placeholder="hello.test" autocomplete="off" />
-          </label>
-          <label class="text-xs text-zinc-400">
-            Folder (inside WSL)
-            <input class="input mt-1 font-mono" name="root" [(ngModel)]="root" placeholder="/home/you/sites/hello" autocomplete="off" />
+      <section class="mt-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+        <h2 class="text-sm font-medium">Add a site</h2>
+        <form class="mt-3 flex gap-3" (ngSubmit)="detect()">
+          <label class="flex-1 text-xs text-zinc-400">
+            Project folder (inside WSL)
+            <input class="input mt-1 font-mono" name="root" [(ngModel)]="root" placeholder="/home/you/projects/lv-oms" autocomplete="off" />
           </label>
           <div class="flex items-end">
-            <button class="btn-primary h-9 px-4" type="submit" [disabled]="busy() !== null">
-              {{ busy() === 'create' ? 'Creating…' : 'Create site' }}
+            <button class="btn h-9 px-4" type="submit" [disabled]="busy() !== null || !root.trim()">
+              {{ busy() === 'detect' ? 'Detecting…' : 'Detect' }}
             </button>
           </div>
-        </div>
-        <p class="mt-2 text-xs text-zinc-500">Laravel and Angular detection arrive in the next milestones.</p>
-      </form>
+        </form>
+
+        @if (detected(); as d) {
+          <form class="mt-4 border-t border-zinc-800 pt-4" (ngSubmit)="create()">
+            <p class="text-sm">
+              Looks like a <span class="font-medium text-emerald-300">{{ typeLabels[d.type] }}</span> project
+              <span class="font-mono text-xs text-zinc-500">({{ d.root }})</span>
+            </p>
+            @for (warning of d.warnings; track warning) {
+              <p class="mt-2 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{{ warning }}</p>
+            }
+
+            @if (d.type !== 'angular') {
+              <div class="mt-4 grid gap-3 md:grid-cols-3">
+                <label class="text-xs text-zinc-400">
+                  Domain
+                  <input class="input mt-1" name="domain" [(ngModel)]="domain" autocomplete="off" />
+                </label>
+                <label class="text-xs text-zinc-400">
+                  Type
+                  <select class="input mt-1" name="type" [(ngModel)]="type">
+                    <option value="laravel">Laravel</option>
+                    <option value="php">PHP</option>
+                    <option value="static">Static</option>
+                  </select>
+                </label>
+                @if (type !== 'static') {
+                  <label class="text-xs text-zinc-400">
+                    PHP version{{ d.phpConstraint ? ' (composer: ' + d.phpConstraint + ')' : '' }}
+                    <select class="input mt-1" name="php" [(ngModel)]="phpVersion">
+                      @for (v of d.installedPhpVersions; track v) {
+                        <option [value]="v">PHP {{ v }}</option>
+                      } @empty {
+                        <option value="" disabled>No PHP installed</option>
+                      }
+                    </select>
+                  </label>
+                }
+              </div>
+              <p class="mt-2 font-mono text-xs text-zinc-500">nginx serves {{ type === 'static' ? d.root : d.docroot }}</p>
+
+              @if (d.database; as db) {
+                <label class="mt-3 flex items-center gap-2 text-sm" [class.opacity-50]="!d.mysqlInstalled">
+                  <input type="checkbox" class="accent-emerald-500" name="createDb" [(ngModel)]="createDatabase" [disabled]="!d.mysqlInstalled" />
+                  Create MySQL database <span class="font-mono">{{ db.name }}</span> for user
+                  <span class="font-mono">{{ db.username }}</span>{{ db.hasPassword ? '' : ' (no password)' }}
+                </label>
+              }
+
+              <button class="btn-primary mt-4 h-9 px-4" type="submit" [disabled]="busy() !== null || (type !== 'static' && !phpVersion)">
+                {{ busy() === 'create' ? 'Creating…' : 'Create ' + domain }}
+              </button>
+            }
+          </form>
+        }
+      </section>
 
       <!-- Site list -->
       <div class="mt-6 divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
@@ -123,7 +177,20 @@ type Busy = null | 'load' | 'create' | 'delete' | 'trust' | 'hosts' | 'mode';
               </a>
               <div class="truncate font-mono text-xs text-zinc-500">{{ site.root }}</div>
             </div>
-            <span class="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{{ site.type }}</span>
+            <span class="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{{ typeLabels[site.type] }}</span>
+            @if (site.phpVersion) {
+              <select
+                class="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs"
+                title="PHP version"
+                [disabled]="busy() !== null"
+                [value]="site.phpVersion"
+                (change)="changePhp(site, $any($event.target).value)"
+              >
+                @for (v of phpVersions(); track v) {
+                  <option [value]="v">PHP {{ v }}</option>
+                }
+              </select>
+            }
             <button class="btn text-zinc-400 hover:text-red-300" [disabled]="busy() !== null" (click)="remove(site)">Remove</button>
           </div>
         } @empty {
@@ -183,8 +250,19 @@ export class Sites implements OnInit {
   protected readonly statusError = signal<string | null>(null);
   protected readonly busy = signal<Busy>(null);
   protected readonly notice = signal<ActionResult | null>(null);
-  protected domain = '';
+  protected readonly detected = signal<DetectResult | null>(null);
+  protected readonly phpVersions = signal<string[]>([]);
+  protected readonly typeLabels: Record<DetectResult['type'], string> = {
+    laravel: 'Laravel',
+    php: 'PHP',
+    static: 'Static',
+    angular: 'Angular',
+  };
   protected root = '';
+  protected domain = '';
+  protected type: SiteType = 'static';
+  protected phpVersion = '';
+  protected createDatabase = true;
 
   ngOnInit(): void {
     void this.load();
@@ -192,7 +270,33 @@ export class Sites implements OnInit {
 
   protected async load(): Promise<void> {
     await this.run('load', async () => {
-      await Promise.all([this.loadSites(), this.loadStatus()]);
+      await Promise.all([this.loadSites(), this.loadStatus(), this.loadPhpVersions()]);
+    });
+  }
+
+  protected async detect(): Promise<void> {
+    await this.run('detect', async () => {
+      this.detected.set(null);
+      const result = await this.daemon.api<DetectResult>({ method: 'POST', path: '/api/sites/detect', body: { root: this.root.trim() } });
+      if (!result.ok) {
+        this.notice.set({ ok: false, message: result.error });
+        return;
+      }
+      const d = result.data;
+      this.root = d.root;
+      this.domain = d.domain;
+      this.type = d.type === 'angular' ? 'static' : d.type;
+      this.phpVersion = d.phpVersion ?? d.installedPhpVersions.at(-1) ?? '';
+      this.createDatabase = d.mysqlInstalled;
+      this.detected.set(d);
+    });
+  }
+
+  protected async changePhp(site: Site, phpVersion: string): Promise<void> {
+    await this.run('update', async () => {
+      const result = await this.daemon.api<Site>({ method: 'PATCH', path: `/api/sites/${site.id}`, body: { phpVersion } });
+      this.notice.set(result.ok ? { ok: true, message: `${site.domain} now runs PHP ${phpVersion}.` } : { ok: false, message: result.error });
+      await this.loadSites();
     });
   }
 
@@ -213,20 +317,29 @@ export class Sites implements OnInit {
       this.notice.set({ ok: false, message: error });
       return;
     }
+    const request: CreateSiteRequest = {
+      domain,
+      root: this.root.trim(),
+      type: this.type,
+      phpVersion: this.type === 'static' ? null : this.phpVersion,
+      createDatabase: this.type === 'laravel' && this.createDatabase,
+    };
     await this.run('create', async () => {
-      const result = await this.daemon.api<Site>({ method: 'POST', path: '/api/sites', body: { domain, root: this.root.trim(), type: 'static' } });
+      const result = await this.daemon.api<CreateSiteResponse>({ method: 'POST', path: '/api/sites', body: request });
       if (!result.ok) {
         this.notice.set({ ok: false, message: result.error });
         return;
       }
+      this.detected.set(null);
       this.domain = '';
       this.root = '';
       await this.loadSites();
       const hosts = await this.daemon.windows.syncHosts();
+      const notes = result.data.notes.length ? `\n${result.data.notes.join('\n')}` : '';
       this.notice.set(
         hosts.ok
-          ? { ok: true, message: `https://${domain} is ready.` }
-          : { ok: false, message: `${domain} was created, but ${hosts.message}` },
+          ? { ok: true, message: `https://${domain} is ready.${notes}` }
+          : { ok: false, message: `${domain} was created, but ${hosts.message}${notes}` },
       );
       await this.loadStatus();
     });
@@ -270,6 +383,14 @@ export class Sites implements OnInit {
     const result = await this.daemon.api<SitesResponse>({ method: 'GET', path: '/api/sites' });
     if (result.ok) this.sites.set(result.data.sites);
     else this.notice.set({ ok: false, message: result.error });
+  }
+
+  private async loadPhpVersions(): Promise<void> {
+    const result = await this.daemon.api<ServicesResponse>({ method: 'GET', path: '/api/services' });
+    if (!result.ok) return;
+    this.phpVersions.set(
+      result.data.services.filter((s) => s.category === 'php' && s.installed).map((s) => s.id.replace(/^php/, '')),
+    );
   }
 
   private async loadStatus(): Promise<void> {

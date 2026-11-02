@@ -1,4 +1,4 @@
-import type { LogSource, ServiceInfo } from '@devkit/shared';
+import { PHP_VERSIONS, type LogSource, type ServiceInfo } from '@devkit/shared';
 
 export interface ServiceDefinition extends ServiceInfo {
   /** apt package whose presence means "installed" and whose version is shown. */
@@ -13,8 +13,6 @@ export interface ServiceDefinition extends ServiceInfo {
   /** Log files by source id (the journal is always available as `journal`). */
   logFiles: Record<string, { label: string; path: string }>;
 }
-
-export const PHP_VERSIONS = ['8.1', '8.2', '8.3', '8.4'] as const;
 
 /** Extensions a Laravel app expects out of the box; per-version toggles arrive with the Tools page. */
 const PHP_BASE_EXTENSIONS = [

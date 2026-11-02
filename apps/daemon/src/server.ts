@@ -5,8 +5,10 @@ import {
   type ApiError,
   type CreateSiteRequest,
   type DaemonConfig,
+  type DetectRequest,
   type SetNetworkRequest,
   type SitesResponse,
+  type UpdateSiteRequest,
   type JobsResponse,
   type LogsResponse,
   type PingResponse,
@@ -29,7 +31,8 @@ import {
 } from './services/services.ts';
 import { getCaInfo } from './sites/certs.ts';
 import { getNetworkInfo } from './sites/network.ts';
-import { changeListenMode, createSite, deleteSite } from './sites/sites.ts';
+import { detectProject } from './sites/detect.ts';
+import { changeListenMode, createSite, deleteSite, setSitePhpVersion } from './sites/sites.ts';
 import type { Store } from './store.ts';
 import { getSystemInfo } from './system.ts';
 
@@ -151,6 +154,22 @@ const routes: Route[] = [
     handler: async ({ request, ctx }) => {
       const body = await readJson<CreateSiteRequest>(request);
       return json(await createSite(ctx.store, ctx.config.user, body), 201);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/sites/detect',
+    handler: async ({ request }) => {
+      const body = await readJson<DetectRequest>(request);
+      return json(await detectProject(String(body.root ?? '').trim()));
+    },
+  },
+  {
+    method: 'PATCH',
+    path: '/api/sites/:id',
+    handler: async ({ request, params, ctx }) => {
+      const body = await readJson<UpdateSiteRequest>(request);
+      return json(await setSitePhpVersion(ctx.store, ctx.config.user, params['id'] ?? '', body.phpVersion));
     },
   },
   {

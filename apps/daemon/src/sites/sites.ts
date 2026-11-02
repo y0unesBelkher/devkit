@@ -1,10 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
-import { validateDomain, type CreateSiteRequest, type ListenMode, type NetworkInfo, type Site } from '@devkit/shared';
+import {
+  PHP_VERSIONS,
+  validateDomain,
+  type CreateSiteRequest,
+  type CreateSiteResponse,
+  type ListenMode,
+  type NetworkInfo,
+  type Site,
+  type SiteType,
+} from '@devkit/shared';
 import { HttpError } from '../http-error.ts';
 import type { Store } from '../store.ts';
 import { ensureSiteCert, removeSiteCert } from './certs.ts';
+import { ensureMysqlDatabase } from './database.ts';
+import { docrootFor } from './detect.ts';
+import { databaseFromEnv, readDotEnv } from './dotenv.ts';
+import { ensurePool, fpmSocket } from './fpm.ts';
 import { getNetworkInfo, setListenMode } from './network.ts';
 import {
   applyConfig,
@@ -12,13 +23,18 @@ import {
   nginxFailed,
   nginxInstalled,
   removeVhost,
+  renderPhpVhost,
   renderStaticVhost,
   testConfig,
   writeListen,
   writeVhost,
 } from './nginx.ts';
+import { syncPhpShim } from './php-shim.ts';
+import { resolveRoot } from './root.ts';
 
-/** Serializes every change to nginx config so concurrent requests cannot interleave. */
+const SITE_TYPES: readonly SiteType[] = ['static', 'php', 'laravel'];
+
+/** Serializes every change to nginx/FPM config so concurrent requests cannot interleave. */
 let lock: Promise<unknown> = Promise.resolve();
 function exclusive<T>(work: () => Promise<T>): Promise<T> {
   const next = lock.then(work, work);
@@ -26,45 +42,81 @@ function exclusive<T>(work: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Checks the requested site root; returns its resolved path. */
-export function resolveRoot(root: string): string {
-  if (!root || !isAbsolute(root)) throw new HttpError(422, 'Root must be an absolute Linux path, e.g. /home/you/projects/app');
-  if (root === '/mnt' || root.startsWith('/mnt/')) {
-    throw new HttpError(422, 'Projects on /mnt (the Windows drive) are slow in WSL. Move the project into the Linux filesystem first.');
+function requirePhpVersion(version: string | null | undefined): string {
+  if (!version || !(PHP_VERSIONS as readonly string[]).includes(version)) {
+    throw new HttpError(422, `Choose a PHP version (${PHP_VERSIONS.join(', ')})`);
   }
-  let resolved: string;
-  try {
-    resolved = realpathSync(root);
-  } catch {
-    throw new HttpError(422, `${root} does not exist`);
-  }
-  if (!statSync(resolved).isDirectory()) throw new HttpError(422, `${root} is not a directory`);
-  return resolved;
+  return version;
 }
 
-export function createSite(store: Store, user: string, request: CreateSiteRequest): Promise<Site> {
+async function renderVhostFor(site: Site, user: string): Promise<string> {
+  const cert = await ensureSiteCert(site.domain);
+  if (site.type === 'static') return renderStaticVhost(site, cert);
+  const version = requirePhpVersion(site.phpVersion);
+  await ensurePool(version, user);
+  return renderPhpVhost(site, cert, fpmSocket(version));
+}
+
+/** Writes the vhost, validates the whole nginx config, and restores `previous` (or removes it) on failure. */
+async function installVhost(site: Site, content: string, previous: string | null): Promise<void> {
+  writeVhost(site, content);
+  const configError = await testConfig();
+  if (configError) {
+    if (previous === null) removeVhost(site.domain);
+    else writeVhost(site, previous);
+    throw new HttpError(422, `nginx rejected the configuration:\n${configError}`);
+  }
+}
+
+export function createSite(store: Store, user: string, request: CreateSiteRequest): Promise<CreateSiteResponse> {
   return exclusive(async () => {
     const domain = String(request.domain ?? '').trim().toLowerCase();
     const domainError = validateDomain(domain);
     if (domainError) throw new HttpError(422, domainError);
-    if (request.type !== 'static') throw new HttpError(422, `Unsupported site type "${request.type}"`);
+    if (!SITE_TYPES.includes(request.type)) throw new HttpError(422, `Unsupported site type "${request.type}"`);
     if (store.findSiteByDomain(domain)) throw new HttpError(409, `${domain} already exists`);
     const root = resolveRoot(String(request.root ?? '').trim());
+    const phpVersion = request.type === 'static' ? null : requirePhpVersion(request.phpVersion);
 
     const network = await getNetworkInfo(store);
     await ensureNginxBase(user, network.mode, network.wslIp);
-    const cert = await ensureSiteCert(domain);
-    const site: Site = { id: randomUUID(), domain, root, type: 'static', createdAt: Date.now() };
+    const site: Site = {
+      id: randomUUID(),
+      domain,
+      root,
+      docroot: docrootFor(request.type, root),
+      type: request.type,
+      phpVersion,
+      createdAt: Date.now(),
+    };
+    await installVhost(site, await renderVhostFor(site, user), null);
 
-    writeVhost(site, renderStaticVhost(site, cert));
-    const configError = await testConfig();
-    if (configError) {
-      removeVhost(domain);
-      throw new HttpError(422, `nginx rejected the configuration:\n${configError}`);
+    // The site works without its database, so a MySQL problem is reported rather than fatal.
+    const notes: string[] = [];
+    if (request.createDatabase && site.type === 'laravel') {
+      const database = databaseFromEnv(readDotEnv(root));
+      if (!database) notes.push('No MySQL database configured in .env; nothing to create.');
+      else notes.push(...(await ensureMysqlDatabase(database).catch((e: Error) => [`Database not created: ${e.message}`])));
     }
+
     store.insertSite(site);
     await applyConfig();
-    return site;
+    syncPhpShim(store.listSites());
+    return { site, notes };
+  });
+}
+
+export function setSitePhpVersion(store: Store, user: string, id: string, version: string): Promise<Site> {
+  return exclusive(async () => {
+    const site = store.getSite(id);
+    if (!site) throw new HttpError(404, 'Unknown site');
+    if (site.type === 'static') throw new HttpError(422, 'Static sites do not use PHP');
+    const updated: Site = { ...site, phpVersion: requirePhpVersion(version) };
+    await installVhost(updated, await renderVhostFor(updated, user), await renderVhostFor(site, user).catch(() => null));
+    store.setSitePhpVersion(id, updated.phpVersion!);
+    await applyConfig();
+    syncPhpShim(store.listSites());
+    return updated;
   });
 }
 
@@ -76,6 +128,7 @@ export function deleteSite(store: Store, id: string): Promise<void> {
     removeSiteCert(site.domain);
     store.deleteSite(id);
     if (nginxInstalled()) await applyConfig();
+    syncPhpShim(store.listSites());
   });
 }
 

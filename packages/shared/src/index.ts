@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.3.0';
+export const DAEMON_VERSION = '0.4.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -55,6 +55,8 @@ export interface SystemInfo {
   user: string;
   /** True unless /etc/wsl.conf sets appendWindowsPath=false (Windows php.exe etc. leak into PATH). */
   windowsPathAppended: boolean;
+  /** DevKit's /usr/local/bin/php shim is installed, so Linux PHP wins over a Windows php.exe on PATH. */
+  phpShim: boolean;
   /** Packages an interrupted upgrade left unconfigured; apt installs fail while this is > 0. */
   packagesNeedingRepair: number;
 }
@@ -78,7 +80,7 @@ export interface BootstrapResult {
 
 /** Request proxied from the renderer to the daemon by the Electron main process. */
 export interface ApiRequest {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;
   body?: unknown;
 }
@@ -187,15 +189,52 @@ export interface CaInfo {
 // ---------------------------------------------------------------------------
 // Sites
 
-export type SiteType = 'static';
+/** PHP versions DevKit installs from the ondrej/php PPA, oldest first. */
+export const PHP_VERSIONS = ['8.1', '8.2', '8.3', '8.4'] as const;
+
+export type SiteType = 'static' | 'php' | 'laravel';
 
 export interface Site {
   id: string;
   domain: string;
-  /** Absolute directory nginx serves, on the Linux filesystem. */
+  /** Project directory on the Linux filesystem. */
   root: string;
+  /** Directory nginx serves (`<root>/public` for Laravel). */
+  docroot: string;
   type: SiteType;
+  /** PHP-FPM version for php/laravel sites; null for static sites. */
+  phpVersion: string | null;
   createdAt: number;
+}
+
+/** POST /api/sites/detect: what a folder looks like, before creating a site from it. */
+export interface DetectRequest {
+  root: string;
+}
+
+export interface SiteDatabase {
+  connection: string;
+  name: string;
+  username: string;
+  hasPassword: boolean;
+}
+
+export interface DetectResult {
+  /** Resolved project directory. */
+  root: string;
+  /** `angular` is recognised but served from milestone 5 on. */
+  type: SiteType | 'angular';
+  domain: string;
+  docroot: string;
+  /** `require.php` from composer.json, e.g. "^8.2". */
+  phpConstraint: string | null;
+  /** Best installed version matching the constraint (or the newest installed). */
+  phpVersion: string | null;
+  installedPhpVersions: string[];
+  /** From .env, when it uses MySQL. */
+  database: SiteDatabase | null;
+  mysqlInstalled: boolean;
+  warnings: string[];
 }
 
 /** POST /api/sites */
@@ -203,6 +242,20 @@ export interface CreateSiteRequest {
   domain: string;
   root: string;
   type: SiteType;
+  phpVersion?: string | null;
+  /** Create the .env database and its user in MySQL. */
+  createDatabase?: boolean;
+}
+
+export interface CreateSiteResponse {
+  site: Site;
+  /** Things that happened besides the site itself (database created, user reused, …). */
+  notes: string[];
+}
+
+/** PATCH /api/sites/:id */
+export interface UpdateSiteRequest {
+  phpVersion: string;
 }
 
 /** GET /api/sites */
