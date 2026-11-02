@@ -2,6 +2,7 @@ import type { Server } from 'bun';
 import { existsSync } from 'node:fs';
 import {
   DAEMON_VERSION,
+  PHP_EXTENSION_ACTIONS,
   PROCESS_ACTIONS,
   SERVICE_ACTIONS,
   type ApiError,
@@ -10,11 +11,14 @@ import {
   type DaemonConfig,
   type DetectRequest,
   type InstallNodeRequest,
+  type NodeGlobalRequest,
   type NodeInfo,
+  type PhpExtensionAction,
   type ProcessAction,
   type ProcessesResponse,
   type SetNetworkRequest,
   type SitesResponse,
+  type ToolsInfo,
   type UpdateProcessRequest,
   type UpdateSiteRequest,
   type JobsResponse,
@@ -40,7 +44,19 @@ import {
 import { getCaInfo } from './sites/certs.ts';
 import { getNetworkInfo } from './sites/network.ts';
 import { FNM_BIN, installNode, listNodeVersions, validateNodeVersion } from './node/fnm.ts';
-import { detectProject } from './sites/detect.ts';
+import { detectProject, installedPhpVersions } from './sites/detect.ts';
+import { composerVersion, installComposer } from './tools/composer.ts';
+import { applyUpdates, healthCheck, refreshPackageLists, toolUpdates, uninstallNode } from './tools/maintenance.ts';
+import { changeGlobal, nodeToolInfo, requireNodeVersion, validatePackageName } from './tools/npm-globals.ts';
+import {
+  installExtension,
+  isQueuedAction,
+  phpToolInfo,
+  requireExtension,
+  requirePhpVersion,
+  toggleExtension,
+  uninstallExtension,
+} from './tools/php-extensions.ts';
 import { getProcess, listProcesses, processAction } from './sites/processes.ts';
 import {
   changeListenMode,
@@ -257,6 +273,95 @@ const routes: Route[] = [
     handler: async ({ params, ctx }) => {
       await deleteSite(ctx.store, params['id'] ?? '');
       return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: 'DELETE',
+    path: '/api/node/:version',
+    handler: ({ params, ctx }) => {
+      const version = requireNodeVersion(ctx.config.user, params['version'] ?? '');
+      const usedBy = ctx.store.listSites().filter((s) => s.nodeVersion === version).map((s) => s.domain);
+      return json(ctx.jobs.enqueue(`Uninstall Node ${version}`, (job) => uninstallNode(job, ctx.config.user, version, usedBy)), 202);
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/tools',
+    handler: async ({ ctx }) => {
+      const [php, composer, node] = await Promise.all([
+        installedPhpVersions().then((versions) => Promise.all(versions.map(phpToolInfo))),
+        composerVersion(),
+        nodeToolInfo(ctx.config.user),
+      ]);
+      return json({
+        php,
+        composer: { installed: composer !== null, version: composer },
+        fnmInstalled: existsSync(FNM_BIN),
+        node,
+      } satisfies ToolsInfo);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/php/:version/extensions/:name/:action',
+    handler: async ({ params, ctx }) => {
+      const version = requirePhpVersion(params['version'] ?? '');
+      const name = requireExtension(params['name'] ?? '').name;
+      const action = params['action'] as PhpExtensionAction;
+      if (!(PHP_EXTENSION_ACTIONS as readonly string[]).includes(action)) throw new HttpError(404, `Unknown action "${action}"`);
+      if (isQueuedAction(action)) {
+        const work = action === 'install' ? installExtension : uninstallExtension;
+        const title = `${action === 'install' ? 'Install' : 'Uninstall'} ${name} for PHP ${version}`;
+        return json(ctx.jobs.enqueue(title, (job) => work(job, version, name)), 202);
+      }
+      await toggleExtension(version, name, action);
+      return json(await phpToolInfo(version));
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/composer/install',
+    handler: ({ ctx }) => json(ctx.jobs.enqueue('Install Composer', (job) => installComposer(job, ctx.config.user)), 202),
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/node/:version/globals',
+    handler: async ({ request, params, ctx }) => {
+      const version = requireNodeVersion(ctx.config.user, params['version'] ?? '');
+      const body = await readJson<NodeGlobalRequest>(request);
+      const name = validatePackageName(String(body.package ?? ''));
+      if (!['install', 'uninstall', 'update'].includes(body.action)) throw new HttpError(422, `Unknown action "${body.action}"`);
+      const title = `${body.action[0]!.toUpperCase()}${body.action.slice(1)} ${name} (Node ${version})`;
+      return json(ctx.jobs.enqueue(title, (job) => changeGlobal(job, ctx.config.user, version, name, body.action)), 202);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/health',
+    handler: ({ ctx }) => json(ctx.jobs.enqueue('Health check', (job) => healthCheck(job, ctx.config.user)), 202),
+  },
+  {
+    method: 'GET',
+    path: '/api/tools/updates',
+    handler: async ({ ctx }) => json(await toolUpdates(ctx.config.user)),
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/updates/check',
+    handler: ({ ctx }) => json(ctx.jobs.enqueue('Check for updates', refreshPackageLists), 202),
+  },
+  {
+    method: 'POST',
+    path: '/api/tools/updates/apply',
+    handler: async ({ request, ctx }) => {
+      const body = await readJson<{ target: 'apt' | 'composer' | 'npm'; nodeVersion?: string }>(request);
+      if (!['apt', 'composer', 'npm'].includes(body.target)) throw new HttpError(422, `Unknown target "${body.target}"`);
+      const nodeVersion = body.target === 'npm' ? requireNodeVersion(ctx.config.user, String(body.nodeVersion ?? '')) : undefined;
+      const title = body.target === 'apt' ? 'Upgrade packages' : body.target === 'composer' ? 'Update Composer' : `Update npm globals (Node ${nodeVersion})`;
+      return json(
+        ctx.jobs.enqueue(title, (job) => applyUpdates(job, ctx.config.user, body.target, nodeVersion), () => void ctx.hub.refresh()),
+        202,
+      );
     },
   },
   {

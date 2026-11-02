@@ -76,6 +76,14 @@ describe('server', () => {
     expect((await call('/api/node/install', { method: 'POST', headers: json, body: '{"version":"; rm -rf /"}' })).status).toBe(422);
   });
 
+  test('tool routes validate before queueing work', async () => {
+    const json = { ...auth, 'content-type': 'application/json' };
+    expect((await call('/api/tools/php/7.4/extensions/xdebug/install', { method: 'POST', headers: auth })).status).toBe(404);
+    expect((await call('/api/tools/node/99.0.0/globals', { method: 'POST', headers: json, body: '{"package":"x","action":"install"}' })).status).toBe(404);
+    expect((await call('/api/node/99.0.0', { method: 'DELETE', headers: auth })).status).toBe(404);
+    expect((await call('/api/tools/updates/apply', { method: 'POST', headers: json, body: '{"target":"everything"}' })).status).toBe(422);
+  });
+
   test('jobs list starts empty', async () => {
     const res = await call('/api/jobs', { headers: auth });
     expect(await res.json()).toEqual({ jobs: [] });

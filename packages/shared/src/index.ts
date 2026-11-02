@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.5.0';
+export const DAEMON_VERSION = '0.6.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -314,6 +314,72 @@ export interface NodeInfo {
 /** POST /api/node/install: "lts" or a version prefix like "22". */
 export interface InstallNodeRequest {
   version: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tools: PHP extensions, Composer, global npm packages, health and updates
+
+export interface PhpExtension {
+  /** Name used in the UI and in apt (`php8.4-<name>`). */
+  name: string;
+  installed: boolean;
+  /** Loaded for PHP-FPM (and CLI). Built-in extensions are always on. */
+  enabled: boolean;
+  /** Shipped inside php-common/php-cli rather than as its own package. */
+  builtin: boolean;
+  /** Can be switched on and off without uninstalling (e.g. xdebug, opcache). */
+  toggleable: boolean;
+}
+
+export interface PhpToolInfo {
+  version: string;
+  /** Full version from `php -v`, e.g. "8.4.27". */
+  release: string | null;
+  extensions: PhpExtension[];
+}
+
+export interface GlobalPackage {
+  name: string;
+  version: string;
+}
+
+export interface NodeToolInfo {
+  version: string;
+  npm: string | null;
+  globals: GlobalPackage[];
+}
+
+/** GET /api/tools */
+export interface ToolsInfo {
+  php: PhpToolInfo[];
+  composer: { installed: boolean; version: string | null };
+  fnmInstalled: boolean;
+  node: NodeToolInfo[];
+}
+
+export const PHP_EXTENSION_ACTIONS = ['install', 'uninstall', 'enable', 'disable'] as const;
+export type PhpExtensionAction = (typeof PHP_EXTENSION_ACTIONS)[number];
+
+/** POST /api/tools/node/:version/globals */
+export interface NodeGlobalRequest {
+  package: string;
+  action: 'install' | 'uninstall' | 'update';
+}
+
+export interface PackageUpdate {
+  name: string;
+  current: string;
+  latest: string;
+}
+
+/** GET /api/tools/updates: what can be upgraded (apt from the cached package lists; refresh with the check job). */
+export interface ToolUpdates {
+  checkedAt: number;
+  /** DevKit-managed apt packages (PHP, nginx, MySQL, Redis, …) with a newer version available. */
+  apt: PackageUpdate[];
+  composer: PackageUpdate | null;
+  /** Outdated global npm packages per Node version. */
+  npm: Record<string, PackageUpdate[]>;
 }
 
 export interface CreateSiteResponse {
