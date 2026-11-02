@@ -17,11 +17,15 @@ export function ensureToken(file: string): string {
   return token;
 }
 
+export function tokenMatches(candidate: string, token: string): boolean {
+  if (!candidate) return false;
+  const given = Buffer.from(candidate);
+  const expected = Buffer.from(token);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
 export function isAuthorized(request: Request, token: string): boolean {
   const header = request.headers.get('authorization') ?? '';
   const match = /^Bearer (.+)$/.exec(header);
-  if (!match?.[1]) return false;
-  const given = Buffer.from(match[1]);
-  const expected = Buffer.from(token);
-  return given.length === expected.length && timingSafeEqual(given, expected);
+  return tokenMatches(match?.[1] ?? '', token);
 }

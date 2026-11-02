@@ -1,8 +1,11 @@
-import { Component, inject } from '@angular/core';
+import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ConsoleView } from '../components/console-view';
 import { Daemon } from '../core/daemon';
+import { ServicesStore } from '../core/services-store';
 
 @Component({
   selector: 'app-dashboard',
+  imports: [ConsoleView],
   template: `
     <div class="mx-auto max-w-4xl p-8">
       <div class="flex items-center justify-between">
@@ -58,6 +61,37 @@ import { Daemon } from '../core/daemon';
         </section>
 
         @if (daemon.system(); as sys) {
+          @if (sys.packagesNeedingRepair > 0 || repairJob()) {
+            <section class="mt-6 overflow-hidden rounded-xl border border-amber-500/40 bg-amber-500/10">
+              <div class="flex items-start justify-between gap-6 p-5">
+                <div>
+                  <h2 class="font-medium text-amber-200">Ubuntu's package system needs repair</h2>
+                  <p class="mt-1 text-sm text-amber-100/80">
+                    @if (sys.packagesNeedingRepair > 0) {
+                      An earlier upgrade was interrupted and left {{ sys.packagesNeedingRepair }} packages unconfigured, so
+                      installing services fails until this is fixed. Repair runs <code>dpkg --configure -a</code>, then
+                      <code>apt-get install -f</code>.
+                    } @else {
+                      Repaired.
+                    }
+                  </p>
+                  @if (store.error(); as error) {
+                    <p class="mt-2 text-sm text-red-300">{{ error }}</p>
+                  }
+                </div>
+                @if (sys.packagesNeedingRepair > 0) {
+                  <button class="shrink-0 rounded-md bg-amber-400 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-amber-300 disabled:opacity-50"
+                    [disabled]="repairRunning()" (click)="repair()">
+                    {{ repairRunning() ? 'Repairing…' : 'Repair package system' }}
+                  </button>
+                }
+              </div>
+              @if (repairJob(); as job) {
+                <app-console-view class="h-64 border-t border-amber-500/30" [lines]="job.output" />
+              }
+            </section>
+          }
+
           <section class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
             <div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
               <div class="text-xs text-zinc-500">Distro</div>
@@ -93,6 +127,26 @@ import { Daemon } from '../core/daemon';
 })
 export class Dashboard {
   protected readonly daemon = inject(Daemon);
+  protected readonly store = inject(ServicesStore);
+
+  private readonly repairJobId = signal<string | null>(null);
+  protected readonly repairJob = computed(() => this.store.job(this.repairJobId() ?? undefined));
+  protected readonly repairRunning = computed(() => {
+    const status = this.repairJob()?.status;
+    return status === 'queued' || status === 'running';
+  });
+
+  constructor() {
+    // Re-read system info once the repair finishes so the warning reflects the new state.
+    effect(() => {
+      const status = this.repairJob()?.status;
+      if (status === 'succeeded' || status === 'failed') void untracked(() => this.daemon.refresh());
+    });
+  }
+
+  protected async repair(): Promise<void> {
+    this.repairJobId.set(await this.store.startJob('/api/system/repair-packages'));
+  }
 
   protected version(): string {
     const state = this.daemon.connection();

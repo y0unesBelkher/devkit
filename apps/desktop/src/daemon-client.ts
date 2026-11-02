@@ -56,6 +56,13 @@ export async function connectionState(): Promise<ConnectionState> {
   return { status: 'connected', version: pong.version };
 }
 
+export const daemonWsUrl = `ws://127.0.0.1:${DAEMON_PORT}/api/ws`;
+
+export async function getToken(): Promise<string> {
+  token ??= await readToken();
+  return token;
+}
+
 async function readToken(): Promise<string> {
   const result = await wsl(['cat', DAEMON_PATHS.token], { user: 'root', timeoutMs: 15_000 });
   if (result.code !== 0) throw new Error(`Cannot read daemon token: ${result.stderr.trim()}`);

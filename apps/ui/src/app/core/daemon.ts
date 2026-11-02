@@ -1,5 +1,14 @@
 import { Injectable, computed, signal } from '@angular/core';
-import type { ApiRequest, ApiResult, ConnectionState, DevkitBridge, SystemInfo } from '@devkit/shared';
+import { Subject } from 'rxjs';
+import type {
+  ApiRequest,
+  ApiResult,
+  ClientMessage,
+  ConnectionState,
+  DaemonEvent,
+  DevkitBridge,
+  SystemInfo,
+} from '@devkit/shared';
 
 declare global {
   interface Window {
@@ -18,6 +27,24 @@ export class Daemon {
   readonly installing = signal(false);
   readonly installLog = signal<string | null>(null);
   readonly connected = computed(() => this.connection().status === 'connected');
+  /** Live events relayed from the daemon WebSocket. */
+  readonly events = new Subject<DaemonEvent>();
+  readonly live = signal(false);
+
+  constructor() {
+    this.bridge?.onEvent((event) => {
+      if (event.type === 'socket') {
+        this.live.set(event.connected);
+        // The daemon came back (restart, upgrade): re-read its state.
+        if (event.connected && this.connection().status !== 'connected') void this.refresh();
+      }
+      this.events.next(event);
+    });
+  }
+
+  send(message: ClientMessage): void {
+    this.bridge?.send(message);
+  }
 
   async refresh(): Promise<void> {
     if (!this.bridge) return;

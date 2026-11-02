@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { DAEMON_VERSION, type DaemonConfig, type SystemInfo } from '@devkit/shared';
+import { packagesNeedingRepair } from './services/system-tools.ts';
 
 export function parseOsRelease(text: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -37,8 +38,9 @@ function readOr(file: string, fallback: string): string {
   }
 }
 
-export function getSystemInfo(config: DaemonConfig, startedAt: number): SystemInfo {
+export async function getSystemInfo(config: DaemonConfig, startedAt: number): Promise<SystemInfo> {
   const os = parseOsRelease(readOr('/etc/os-release', ''));
+  const packagesNeedingRepairCount = await packagesNeedingRepair().catch(() => 0);
   const pid1 = readOr('/proc/1/comm', '').trim();
   return {
     daemon: {
@@ -56,5 +58,6 @@ export function getSystemInfo(config: DaemonConfig, startedAt: number): SystemIn
     systemd: pid1 === 'systemd',
     user: config.user,
     windowsPathAppended: parseAppendWindowsPath(readOr('/etc/wsl.conf', '')),
+    packagesNeedingRepair: packagesNeedingRepairCount,
   };
 }

@@ -1,8 +1,9 @@
 import { join, resolve } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import type { ApiRequest } from '@devkit/shared';
+import type { ApiRequest, ClientMessage } from '@devkit/shared';
 import { installDaemon } from './bootstrap';
 import { api, connectionState } from './daemon-client';
+import { DaemonSocket } from './daemon-socket';
 
 const devServerUrl = process.env['DEVKIT_UI_URL'] ?? (app.isPackaged ? null : 'http://localhost:4200');
 
@@ -37,10 +38,19 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+const socket = new DaemonSocket((event) => {
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send('devkit:event', event);
+});
+
 function registerIpc(): void {
   ipcMain.handle('devkit:connection', () => connectionState());
-  ipcMain.handle('devkit:install-daemon', () => installDaemon());
+  ipcMain.handle('devkit:install-daemon', async () => {
+    const result = await installDaemon();
+    if (result.ok) socket.reconnect();
+    return result;
+  });
   ipcMain.handle('devkit:api', (_event, request: ApiRequest) => api(request));
+  ipcMain.on('devkit:ws-send', (_event, message: ClientMessage) => socket.send(message));
 }
 
 /** `electron . --install-daemon` / `--status`: run one bootstrap step without a window, print JSON, exit. */
@@ -73,6 +83,7 @@ if (headlessFlag) {
   void app.whenReady().then(() => {
     registerIpc();
     createWindow();
+    socket.start();
   });
 
   app.on('window-all-closed', () => app.quit());
