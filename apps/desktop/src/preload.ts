@@ -6,6 +6,7 @@ const bridge: DevkitBridge = {
   connection: () => ipcRenderer.invoke('devkit:connection'),
   installDaemon: () => ipcRenderer.invoke('devkit:install-daemon'),
   api: (request) => ipcRenderer.invoke('devkit:api', request),
+  isLive: () => ipcRenderer.invoke('devkit:is-live'),
   onEvent: (listener) => {
     const handler = (_event: IpcRendererEvent, daemonEvent: DaemonEvent) => listener(daemonEvent);
     ipcRenderer.on('devkit:event', handler);

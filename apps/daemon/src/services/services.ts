@@ -62,7 +62,12 @@ function hasPpa(ppa: string): boolean {
 
 /** Finishes an interrupted dpkg run: configures unpacked packages, then lets apt fix dependencies. */
 export async function repairPackages(ctx: JobContext): Promise<void> {
-  await ctx.exec(['dpkg', '--configure', '-a', '--force-confdef', '--force-confold'], APT_ENV);
+  // dpkg fails when some packages have unmet dependencies (e.g. a half-downloaded upgrade);
+  // apt-get -f installs the missing versions and configures what dpkg left behind.
+  await ctx.exec(['dpkg', '--configure', '-a', '--force-confdef', '--force-confold'], APT_ENV).catch((e: Error) => {
+    ctx.log(`${e.message}; letting apt fix the remaining dependencies.`);
+  });
+  await ctx.exec(['apt-get', 'update', ...APT_OPTS], APT_ENV);
   await ctx.exec(['apt-get', 'install', '-f', '-y', ...APT_OPTS], APT_ENV);
   const remaining = await packagesNeedingRepair();
   if (remaining > 0) throw new Error(`${remaining} packages still need attention; see "dpkg --audit" in WSL.`);

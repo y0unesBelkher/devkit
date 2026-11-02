@@ -40,6 +40,8 @@ export class Daemon {
       }
       this.events.next(event);
     });
+    // The socket may have opened before this page loaded, in which case its event was missed.
+    void this.bridge?.isLive().then((live) => this.live.set(live));
   }
 
   send(message: ClientMessage): void {

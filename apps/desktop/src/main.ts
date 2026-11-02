@@ -50,6 +50,7 @@ function registerIpc(): void {
     return result;
   });
   ipcMain.handle('devkit:api', (_event, request: ApiRequest) => api(request));
+  ipcMain.handle('devkit:is-live', () => socket.connected);
   ipcMain.on('devkit:ws-send', (_event, message: ClientMessage) => socket.send(message));
 }
 

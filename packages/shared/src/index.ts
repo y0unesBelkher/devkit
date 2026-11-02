@@ -166,6 +166,8 @@ export interface DevkitBridge {
   connection(): Promise<ConnectionState>;
   installDaemon(): Promise<BootstrapResult>;
   api<T = unknown>(request: ApiRequest): Promise<ApiResult<T>>;
+  /** Whether the main process currently has the daemon socket open (events only report changes). */
+  isLive(): Promise<boolean>;
   /** Subscribes to live daemon events; returns an unsubscribe function. */
   onEvent(listener: (event: DaemonEvent) => void): () => void;
   send(message: ClientMessage): void;
