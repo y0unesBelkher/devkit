@@ -1,0 +1,22 @@
+{
+  "name": "devkit",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:daemon": "npm -w @devkit/daemon run build",
+    "build:ui": "npm -w @devkit/ui run build",
+    "build:desktop": "npm -w @devkit/desktop run build",
+    "build": "npm run build:daemon && npm run build:ui && npm run build:desktop",
+    "dev": "npm run build:daemon && concurrently -k -n ui,desktop -c cyan,magenta \"npm -w @devkit/ui start\" \"wait-on http://localhost:4200 && npm -w @devkit/desktop run dev\"",
+    "test": "npm -w @devkit/daemon test",
+    "typecheck": "npm -w @devkit/daemon run typecheck && npm -w @devkit/desktop run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wait-on": "^9.0.1"
+  }
+}
