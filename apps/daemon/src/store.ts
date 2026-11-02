@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import type { Site, SiteType } from '@devkit/shared';
+import { dirname } from 'node:path/posix';
+import type { ProcessKind, Site, SiteType } from '@devkit/shared';
 
 interface SiteRow {
   id: string;
@@ -10,7 +10,28 @@ interface SiteRow {
   docroot: string;
   type: string;
   php_version: string | null;
+  node_version: string | null;
+  port: number | null;
   created_at: number;
+}
+
+/** A site process as stored; its live state comes from systemd. */
+export interface ProcessRow {
+  id: string;
+  siteId: string;
+  kind: ProcessKind;
+  name: string;
+  command: string;
+  autostart: boolean;
+}
+
+interface ProcessDbRow {
+  id: string;
+  site_id: string;
+  kind: string;
+  name: string;
+  command: string;
+  autostart: number;
 }
 
 /** Each migration is a list of single statements, applied in a transaction. */
@@ -30,6 +51,19 @@ const MIGRATIONS: string[][] = [
     `ALTER TABLE sites ADD COLUMN php_version TEXT`,
     `UPDATE sites SET docroot = root WHERE docroot = ''`,
   ],
+  [
+    `ALTER TABLE sites ADD COLUMN node_version TEXT`,
+    `ALTER TABLE sites ADD COLUMN port INTEGER`,
+    `CREATE TABLE processes (
+       id TEXT PRIMARY KEY,
+       site_id TEXT NOT NULL,
+       kind TEXT NOT NULL,
+       name TEXT NOT NULL,
+       command TEXT NOT NULL,
+       autostart INTEGER NOT NULL,
+       created_at INTEGER NOT NULL
+     )`,
+  ],
 ];
 
 const toSite = (row: SiteRow): Site => ({
@@ -39,7 +73,18 @@ const toSite = (row: SiteRow): Site => ({
   docroot: row.docroot,
   type: row.type as SiteType,
   phpVersion: row.php_version,
+  nodeVersion: row.node_version,
+  port: row.port,
   createdAt: row.created_at,
+});
+
+const toProcess = (row: ProcessDbRow): ProcessRow => ({
+  id: row.id,
+  siteId: row.site_id,
+  kind: row.kind as ProcessKind,
+  name: row.name,
+  command: row.command,
+  autostart: row.autostart === 1,
 });
 
 /** Daemon state in SQLite (sites, settings). Pass ':memory:' in tests. */
@@ -87,8 +132,10 @@ export class Store {
 
   insertSite(site: Site): void {
     this.db
-      .query('INSERT INTO sites (id, domain, root, docroot, type, php_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(site.id, site.domain, site.root, site.docroot, site.type, site.phpVersion, site.createdAt);
+      .query(
+        'INSERT INTO sites (id, domain, root, docroot, type, php_version, node_version, port, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(site.id, site.domain, site.root, site.docroot, site.type, site.phpVersion, site.nodeVersion, site.port, site.createdAt);
   }
 
   setSitePhpVersion(id: string, phpVersion: string): void {
@@ -97,6 +144,34 @@ export class Store {
 
   deleteSite(id: string): void {
     this.db.query('DELETE FROM sites WHERE id = ?').run(id);
+  }
+
+  listProcesses(siteId?: string): ProcessRow[] {
+    const rows = siteId
+      ? this.db.query<ProcessDbRow, [string]>('SELECT * FROM processes WHERE site_id = ? ORDER BY created_at').all(siteId)
+      : this.db.query<ProcessDbRow, []>('SELECT * FROM processes ORDER BY created_at').all();
+    return rows.map(toProcess);
+  }
+
+  getProcess(id: string): ProcessRow | null {
+    const row = this.db.query<ProcessDbRow, [string]>('SELECT * FROM processes WHERE id = ?').get(id);
+    return row ? toProcess(row) : null;
+  }
+
+  insertProcess(process: ProcessRow): void {
+    this.db
+      .query('INSERT INTO processes (id, site_id, kind, name, command, autostart, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(process.id, process.siteId, process.kind, process.name, process.command, process.autostart ? 1 : 0, Date.now());
+  }
+
+  updateProcess(process: ProcessRow): void {
+    this.db
+      .query('UPDATE processes SET name = ?, command = ?, autostart = ? WHERE id = ?')
+      .run(process.name, process.command, process.autostart ? 1 : 0, process.id);
+  }
+
+  deleteProcess(id: string): void {
+    this.db.query('DELETE FROM processes WHERE id = ?').run(id);
   }
 
   close(): void {

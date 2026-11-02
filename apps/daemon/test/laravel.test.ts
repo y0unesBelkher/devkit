@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path/posix';
 import { Database } from 'bun:sqlite';
 import type { Site } from '@devkit/shared';
 import { detectType, docrootFor, domainFromFolder } from '../src/sites/detect.ts';
@@ -123,6 +123,8 @@ describe('php site config', () => {
     docroot: '/home/dev/lv-oms/public',
     type: 'laravel',
     phpVersion: '8.4',
+    nodeVersion: null,
+    port: null,
     createdAt: 1,
   };
 
@@ -161,7 +163,7 @@ describe('store migration', () => {
 
     const store = new Store(file);
     expect(store.listSites()).toEqual([
-      { id: '1', domain: 'hello.test', root: '/home/dev/hello', docroot: '/home/dev/hello', type: 'static', phpVersion: null, createdAt: 5 },
+      { id: '1', domain: 'hello.test', root: '/home/dev/hello', docroot: '/home/dev/hello', type: 'static', phpVersion: null, nodeVersion: null, port: null, createdAt: 5 },
     ]);
     store.close();
     rmSync(dir, { recursive: true, force: true });

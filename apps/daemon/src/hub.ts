@@ -4,6 +4,8 @@ import { streamLines, type LineStream } from './exec.ts';
 import { findService } from './services/catalog.ts';
 import { logCommand } from './services/logs.ts';
 import { listServices } from './services/services.ts';
+import { listProcesses, unitName } from './sites/processes.ts';
+import type { Store } from './store.ts';
 
 export interface SocketData {
   logStream: LineStream | null;
@@ -14,19 +16,21 @@ export type Socket = ServerWebSocket<SocketData>;
 const POLL_MS = 5000;
 const INITIAL_LOG_LINES = 200;
 
-/** Live connections: broadcasts service/job events and runs one log tail per socket. */
+/** Live connections: broadcasts service, process and job events, and runs one log tail per socket. */
 export class Hub {
   private readonly sockets = new Set<Socket>();
-  private lastServices = '';
+  private last = { services: '', processes: '' };
   private refreshing: Promise<void> | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
 
+  constructor(private readonly store: Store) {}
+
   add(ws: Socket): void {
     this.sockets.add(ws);
-    // A fresh socket always gets the current list, even if nothing changed.
-    this.lastServices = '';
-    void this.refreshServices();
-    this.poll ??= setInterval(() => void this.refreshServices(), POLL_MS);
+    // A fresh socket always gets the current state, even if nothing changed.
+    this.last = { services: '', processes: '' };
+    void this.refresh();
+    this.poll ??= setInterval(() => void this.refresh(), POLL_MS);
   }
 
   remove(ws: Socket): void {
@@ -43,18 +47,23 @@ export class Hub {
     for (const ws of this.sockets) ws.send(payload);
   }
 
-  /** Re-reads service states and broadcasts them if anything changed (e.g. a crash noticed by systemd). */
-  refreshServices(): Promise<void> {
+  /** Re-reads service and process states and broadcasts whatever changed (e.g. a crash noticed by systemd). */
+  refresh(): Promise<void> {
     this.refreshing ??= (async () => {
       try {
-        const services = await listServices();
-        const json = JSON.stringify(services);
-        if (json !== this.lastServices) {
-          this.lastServices = json;
+        const [services, processes] = await Promise.all([listServices(), listProcesses(this.store)]);
+        const servicesJson = JSON.stringify(services);
+        if (servicesJson !== this.last.services) {
+          this.last.services = servicesJson;
           this.broadcast({ type: 'services', services });
         }
+        const processesJson = JSON.stringify(processes);
+        if (processesJson !== this.last.processes) {
+          this.last.processes = processesJson;
+          this.broadcast({ type: 'processes', processes });
+        }
       } catch (e) {
-        console.error('refreshServices failed:', e);
+        console.error('state refresh failed:', e);
       } finally {
         this.refreshing = null;
       }
@@ -69,20 +78,33 @@ export class Hub {
     } catch {
       return;
     }
-    if (message.type === 'logs.unsubscribe') {
-      this.stopLogs(ws);
-    } else if (message.type === 'logs.subscribe') {
-      this.startLogs(ws, message.serviceId, message.sourceId);
-    }
+    if (message.type === 'logs.unsubscribe') this.stopLogs(ws);
+    else if (message.type === 'logs.subscribe') this.startServiceLogs(ws, message.serviceId, message.sourceId);
+    else if (message.type === 'process-logs.subscribe') this.startProcessLogs(ws, message.processId);
   }
 
-  private startLogs(ws: Socket, serviceId: string, sourceId: string): void {
-    this.stopLogs(ws);
+  private startServiceLogs(ws: Socket, serviceId: string, sourceId: string): void {
     const send = (lines: string[]) => ws.send(JSON.stringify({ type: 'log', serviceId, sourceId, lines } satisfies DaemonEvent));
     const def = findService(serviceId);
-    try {
+    this.stream(ws, send, () => {
       if (!def) throw new Error(`Unknown service "${serviceId}"`);
-      ws.data.logStream = streamLines(logCommand(def, sourceId, INITIAL_LOG_LINES, true), send);
+      return logCommand(def, sourceId, INITIAL_LOG_LINES, true);
+    });
+  }
+
+  private startProcessLogs(ws: Socket, processId: string): void {
+    const send = (lines: string[]) => ws.send(JSON.stringify({ type: 'process-log', processId, lines } satisfies DaemonEvent));
+    this.stream(ws, send, () => {
+      if (!this.store.getProcess(processId)) throw new Error('Unknown process');
+      // Bare messages: dev servers and workers print their own timestamps.
+      return ['journalctl', '-u', unitName(processId), '-n', String(INITIAL_LOG_LINES), '--no-pager', '-o', 'cat', '-f'];
+    });
+  }
+
+  private stream(ws: Socket, send: (lines: string[]) => void, command: () => string[]): void {
+    this.stopLogs(ws);
+    try {
+      ws.data.logStream = streamLines(command(), send);
     } catch (e) {
       send([`[devkit] ${e instanceof Error ? e.message : String(e)}`]);
     }

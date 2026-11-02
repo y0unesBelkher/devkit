@@ -4,13 +4,14 @@ import { JobQueue } from '../src/jobs.ts';
 import { createFetch, matchPath } from '../src/server.ts';
 import { Store } from '../src/store.ts';
 
+const store = new Store(':memory:');
 const fetchHandler = createFetch({
+  store,
   config: { user: 'dev', port: 0 },
   token: 'secret',
   startedAt: Date.now(),
   jobs: new JobQueue({ onJob: () => {}, onOutput: () => {} }),
-  hub: new Hub(),
-  store: new Store(':memory:'),
+  hub: new Hub(store),
 });
 const call = async (path: string, init?: RequestInit) => {
   const res = await fetchHandler(new Request(`http://127.0.0.1${path}`, init));
@@ -63,6 +64,16 @@ describe('server', () => {
     expect((await call('/api/sites', { method: 'POST', headers: auth, body: 'not json' })).status).toBe(400);
     expect((await call('/api/sites/missing', { method: 'DELETE', headers: auth })).status).toBe(404);
     expect(await (await call('/api/sites', { headers: auth })).json()).toEqual({ sites: [] });
+  });
+
+  test('process routes validate before touching systemd', async () => {
+    const json = { ...auth, 'content-type': 'application/json' };
+    expect(await (await call('/api/processes', { headers: auth })).json()).toEqual({ processes: [] });
+    expect((await call('/api/sites/missing/processes', { method: 'POST', headers: json, body: '{"kind":"queue"}' })).status).toBe(404);
+    expect((await call('/api/processes/missing/start', { method: 'POST', headers: auth })).status).toBe(404);
+    expect((await call('/api/processes/missing/explode', { method: 'POST', headers: auth })).status).toBe(404);
+    expect((await call('/api/processes/missing', { method: 'DELETE', headers: auth })).status).toBe(404);
+    expect((await call('/api/node/install', { method: 'POST', headers: json, body: '{"version":"; rm -rf /"}' })).status).toBe(422);
   });
 
   test('jobs list starts empty', async () => {

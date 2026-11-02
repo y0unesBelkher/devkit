@@ -90,6 +90,14 @@ export function compileConstraint(constraint: string): Check | null {
   return (v) => alternatives.some((check) => check(v));
 }
 
+/** True when the full version "X.Y.Z" satisfies the constraint (npm-style ranges work too). */
+export function versionSatisfies(constraint: string, version: string): boolean {
+  const check = compileConstraint(constraint);
+  if (!check) return true;
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number);
+  return check([major, minor, patch]);
+}
+
 /** True when some release of minor version "X.Y" satisfies the constraint. */
 export function minorSatisfies(constraint: string, minor: string): boolean {
   const check = compileConstraint(constraint);

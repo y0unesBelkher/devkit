@@ -11,6 +11,8 @@ const site: Site = {
   docroot: '/home/dev/hello',
   type: 'static',
   phpVersion: null,
+  nodeVersion: null,
+  port: null,
   createdAt: 1,
 };
 

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join } from 'node:path/posix';
 import { DAEMON_PATHS, type ListenMode, type Site } from '@devkit/shared';
 import { run } from '../exec.ts';
 import { HttpError } from '../http-error.ts';
@@ -69,6 +69,39 @@ export function renderStaticVhost(site: Site, cert: CertPaths): string {
   );
 }
 
+/** Dev servers (ng serve): TLS ends here, HTTP and WebSocket (live reload) go to the loopback port. */
+export function renderProxyVhost(site: Site, cert: CertPaths, port: number): string {
+  const downPage =
+    `<!doctype html><title>Dev server not running</title><body style="font:16px system-ui;padding:3rem;max-width:40rem">` +
+    `<h1>The dev server for ${site.domain} is not running</h1>` +
+    `<p>Start <b>ng serve</b> for this site on the Sites page in DevKit, or check its logs there.</p></body>`;
+  return serverBlocks(
+    site,
+    cert,
+    `    location / {
+        proxy_pass http://127.0.0.1:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $devkit_connection_upgrade;
+        # Vite rejects unknown hosts (DNS-rebinding protection) and always allows localhost.
+        proxy_set_header Host localhost;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 1h;
+        proxy_buffering off;
+    }
+
+    error_page 502 504 = @devkit_dev_server_down;
+    location @devkit_dev_server_down {
+        default_type text/html;
+        return 502 '${downPage}';
+    }
+`,
+  );
+}
+
 /** PHP and Laravel: front controller routing to the per-version DevKit FPM pool. */
 export function renderPhpVhost(site: Site, cert: CertPaths, fpmSocket: string): string {
   return serverBlocks(
@@ -115,6 +148,11 @@ export async function ensureNginxBase(user: string, mode: ListenMode, ip: string
   // Request bodies and proxy buffers are written here by the workers.
   await run(['chown', '-R', user, '/var/lib/nginx']);
   rmSync(join(SITES_ENABLED, 'default'), { force: true });
+  // http-level helper for proxied WebSockets (conf.d is included in the http block).
+  writeFileSync(
+    '/etc/nginx/conf.d/devkit-maps.conf',
+    '# Managed by DevKit\nmap $http_upgrade $devkit_connection_upgrade {\n    default upgrade;\n    \'\' close;\n}\n',
+  );
   writeListen(mode, ip);
 }
 
@@ -137,6 +175,14 @@ export function writeVhost(site: Site, content: string): void {
   const link = join(SITES_ENABLED, vhostName(site.domain));
   rmSync(link, { force: true });
   symlinkSync(file, link);
+}
+
+export function readVhost(domain: string): string | null {
+  try {
+    return readFileSync(join(SITES_AVAILABLE, vhostName(domain)), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 export function removeVhost(domain: string): void {

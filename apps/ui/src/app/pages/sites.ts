@@ -1,26 +1,35 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   SITE_TLD,
   validateDomain,
   type ActionResult,
+  type ActiveState,
+  type CreateProcessRequest,
   type CreateSiteRequest,
   type CreateSiteResponse,
   type DetectResult,
   type ListenMode,
+  type ProcessAction,
+  type ProcessKind,
+  type ProcessesResponse,
   type ServicesResponse,
   type Site,
+  type SiteProcess,
   type SiteType,
   type SitesResponse,
   type WindowsStatus,
 } from '@devkit/shared';
+import { ConsoleView } from '../components/console-view';
 import { Daemon } from '../core/daemon';
+
+const MAX_LOG_LINES = 2000;
 
 type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' | 'hosts' | 'mode';
 
 @Component({
   selector: 'app-sites',
-  imports: [FormsModule],
+  imports: [FormsModule, ConsoleView],
   template: `
     <div class="mx-auto max-w-5xl p-8">
       <div class="flex items-center justify-between">
@@ -122,47 +131,63 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
               <p class="mt-2 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{{ warning }}</p>
             }
 
-            @if (d.type !== 'angular') {
-              <div class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="mt-4 grid gap-3 md:grid-cols-3">
+              <label class="text-xs text-zinc-400">
+                Domain
+                <input class="input mt-1" name="domain" [(ngModel)]="domain" autocomplete="off" />
+              </label>
+              <label class="text-xs text-zinc-400">
+                Type
+                <select class="input mt-1" name="type" [(ngModel)]="type">
+                  <option value="laravel">Laravel</option>
+                  <option value="angular">Angular</option>
+                  <option value="php">PHP</option>
+                  <option value="static">Static</option>
+                </select>
+              </label>
+              @if (type === 'php' || type === 'laravel') {
                 <label class="text-xs text-zinc-400">
-                  Domain
-                  <input class="input mt-1" name="domain" [(ngModel)]="domain" autocomplete="off" />
-                </label>
-                <label class="text-xs text-zinc-400">
-                  Type
-                  <select class="input mt-1" name="type" [(ngModel)]="type">
-                    <option value="laravel">Laravel</option>
-                    <option value="php">PHP</option>
-                    <option value="static">Static</option>
+                  PHP version{{ d.phpConstraint ? ' (composer: ' + d.phpConstraint + ')' : '' }}
+                  <select class="input mt-1" name="php" [(ngModel)]="phpVersion">
+                    @for (v of d.installedPhpVersions; track v) {
+                      <option [value]="v">PHP {{ v }}</option>
+                    } @empty {
+                      <option value="" disabled>No PHP installed</option>
+                    }
                   </select>
                 </label>
-                @if (type !== 'static') {
-                  <label class="text-xs text-zinc-400">
-                    PHP version{{ d.phpConstraint ? ' (composer: ' + d.phpConstraint + ')' : '' }}
-                    <select class="input mt-1" name="php" [(ngModel)]="phpVersion">
-                      @for (v of d.installedPhpVersions; track v) {
-                        <option [value]="v">PHP {{ v }}</option>
-                      } @empty {
-                        <option value="" disabled>No PHP installed</option>
-                      }
-                    </select>
-                  </label>
-                }
-              </div>
-              <p class="mt-2 font-mono text-xs text-zinc-500">nginx serves {{ type === 'static' ? d.root : d.docroot }}</p>
-
-              @if (d.database; as db) {
-                <label class="mt-3 flex items-center gap-2 text-sm" [class.opacity-50]="!d.mysqlInstalled">
-                  <input type="checkbox" class="accent-emerald-500" name="createDb" [(ngModel)]="createDatabase" [disabled]="!d.mysqlInstalled" />
-                  Create MySQL database <span class="font-mono">{{ db.name }}</span> for user
-                  <span class="font-mono">{{ db.username }}</span>{{ db.hasPassword ? '' : ' (no password)' }}
+              } @else if (type === 'angular') {
+                <label class="text-xs text-zinc-400">
+                  Node version{{ d.nodeRequirement ? ' (project: ' + d.nodeRequirement + ')' : '' }}
+                  <select class="input mt-1" name="node" [(ngModel)]="nodeVersion">
+                    @for (v of d.installedNodeVersions; track v) {
+                      <option [value]="v">Node {{ v }}</option>
+                    } @empty {
+                      <option value="" disabled>No Node installed</option>
+                    }
+                  </select>
                 </label>
               }
+            </div>
+            <p class="mt-2 font-mono text-xs text-zinc-500">
+              @if (type === 'angular') {
+                nginx proxies to ng serve, which DevKit runs and restarts for you
+              } @else {
+                nginx serves {{ type === 'static' ? d.root : d.docroot }}
+              }
+            </p>
 
-              <button class="btn-primary mt-4 h-9 px-4" type="submit" [disabled]="busy() !== null || (type !== 'static' && !phpVersion)">
-                {{ busy() === 'create' ? 'Creating…' : 'Create ' + domain }}
-              </button>
+            @if (type === 'laravel' && d.database; as db) {
+              <label class="mt-3 flex items-center gap-2 text-sm" [class.opacity-50]="!d.mysqlInstalled">
+                <input type="checkbox" class="accent-emerald-500" name="createDb" [(ngModel)]="createDatabase" [disabled]="!d.mysqlInstalled" />
+                Create MySQL database <span class="font-mono">{{ db.name }}</span> for user
+                <span class="font-mono">{{ db.username }}</span>{{ db.hasPassword ? '' : ' (no password)' }}
+              </label>
             }
+
+            <button class="btn-primary mt-4 h-9 px-4" type="submit" [disabled]="busy() !== null || !canCreate()">
+              {{ busy() === 'create' ? 'Creating…' : 'Create ' + domain }}
+            </button>
           </form>
         }
       </section>
@@ -170,6 +195,7 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
       <!-- Site list -->
       <div class="mt-6 divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
         @for (site of sites(); track site.id) {
+          <div>
           <div class="flex items-center gap-4 px-4 py-3">
             <div class="min-w-0 flex-1">
               <a class="font-medium text-emerald-300 hover:underline" [href]="'https://' + site.domain" target="_blank">
@@ -178,6 +204,9 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
               <div class="truncate font-mono text-xs text-zinc-500">{{ site.root }}</div>
             </div>
             <span class="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{{ typeLabels[site.type] }}</span>
+            @if (site.nodeVersion) {
+              <span class="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400" title="Dev server port {{ site.port }}">Node {{ site.nodeVersion }}</span>
+            }
             @if (site.phpVersion) {
               <select
                 class="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs"
@@ -192,6 +221,47 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
               </select>
             }
             <button class="btn text-zinc-400 hover:text-red-300" [disabled]="busy() !== null" (click)="remove(site)">Remove</button>
+          </div>
+
+          <!-- Processes -->
+          @if (processesFor(site.id).length || kindsFor(site).length) {
+            <div class="border-t border-zinc-800/60 bg-zinc-950/40 px-4 py-2">
+              @for (p of processesFor(site.id); track p.id) {
+                <div class="flex items-center gap-3 py-1.5 text-sm">
+                  <span class="size-2 shrink-0 rounded-full" [class]="stateDot(p.active)" [title]="p.active"></span>
+                  <span class="w-28 shrink-0 truncate">{{ p.name }}</span>
+                  <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-500" [title]="p.command">{{ p.command }}</span>
+                  <label class="flex items-center gap-1.5 text-xs text-zinc-400" title="Start when WSL boots">
+                    <input type="checkbox" class="accent-emerald-500" [checked]="p.autostart" [disabled]="busy() !== null"
+                      (change)="setAutostart(p, !p.autostart)" />
+                    At boot
+                  </label>
+                  @if (p.active === 'active' || p.active === 'activating') {
+                    <button class="btn" [disabled]="busy() !== null" (click)="processAction(p, 'stop')">Stop</button>
+                  } @else {
+                    <button class="btn" [disabled]="busy() !== null" (click)="processAction(p, 'start')">Start</button>
+                  }
+                  <button class="btn" [disabled]="busy() !== null" (click)="processAction(p, 'restart')">Restart</button>
+                  <button class="btn" [class.bg-zinc-800]="logProcess() === p.id" (click)="toggleLogs(p)">Logs</button>
+                  <button class="btn text-zinc-500 hover:text-red-300" title="Remove process" [disabled]="busy() !== null" (click)="removeProcess(p)">✕</button>
+                </div>
+                @if (logProcess() === p.id) {
+                  <app-console-view class="mb-2 h-64 overflow-hidden rounded-md border border-zinc-800" [lines]="logLines()"
+                    placeholder="Waiting for output…" />
+                }
+              }
+              @if (kindsFor(site).length) {
+                <div class="flex items-center gap-2 py-1.5">
+                  <select #kind class="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs">
+                    @for (k of kindsFor(site); track k) {
+                      <option [value]="k">{{ kindLabels[k] }}</option>
+                    }
+                  </select>
+                  <button class="btn" [disabled]="busy() !== null" (click)="addProcess(site, $any(kind.value))">Add process</button>
+                </div>
+              }
+            </div>
+          }
           </div>
         } @empty {
           <p class="px-4 py-6 text-center text-sm text-zinc-500">No sites yet.</p>
@@ -252,17 +322,41 @@ export class Sites implements OnInit {
   protected readonly notice = signal<ActionResult | null>(null);
   protected readonly detected = signal<DetectResult | null>(null);
   protected readonly phpVersions = signal<string[]>([]);
-  protected readonly typeLabels: Record<DetectResult['type'], string> = {
+  protected readonly processes = signal<SiteProcess[]>([]);
+  protected readonly logProcess = signal<string | null>(null);
+  protected readonly logLines = signal<string[]>([]);
+  protected readonly typeLabels: Record<SiteType, string> = {
     laravel: 'Laravel',
     php: 'PHP',
     static: 'Static',
     angular: 'Angular',
   };
+  protected readonly kindLabels: Record<ProcessKind, string> = {
+    'ng-serve': 'ng serve',
+    queue: 'Queue worker',
+    schedule: 'Scheduler',
+    horizon: 'Horizon',
+    custom: 'Custom command…',
+  };
   protected root = '';
   protected domain = '';
   protected type: SiteType = 'static';
   protected phpVersion = '';
+  protected nodeVersion = '';
   protected createDatabase = true;
+
+  constructor() {
+    const subscription = this.daemon.events.subscribe((event) => {
+      if (event.type === 'processes') this.processes.set(event.processes);
+      if (event.type === 'process-log' && event.processId === this.logProcess()) {
+        this.logLines.update((lines) => [...lines, ...event.lines].slice(-MAX_LOG_LINES));
+      }
+    });
+    inject(DestroyRef).onDestroy(() => {
+      subscription.unsubscribe();
+      if (this.logProcess()) this.daemon.send({ type: 'logs.unsubscribe' });
+    });
+  }
 
   ngOnInit(): void {
     void this.load();
@@ -270,8 +364,86 @@ export class Sites implements OnInit {
 
   protected async load(): Promise<void> {
     await this.run('load', async () => {
-      await Promise.all([this.loadSites(), this.loadStatus(), this.loadPhpVersions()]);
+      await Promise.all([this.loadSites(), this.loadStatus(), this.loadPhpVersions(), this.loadProcesses()]);
     });
+  }
+
+  protected canCreate(): boolean {
+    if (this.type === 'php' || this.type === 'laravel') return !!this.phpVersion;
+    if (this.type === 'angular') return !!this.nodeVersion;
+    return true;
+  }
+
+  protected processesFor(siteId: string): SiteProcess[] {
+    return this.processes().filter((p) => p.siteId === siteId);
+  }
+
+  /** Process kinds that can still be added (one of each built-in kind; custom any number of times). */
+  protected kindsFor(site: Site): ProcessKind[] {
+    const allowed: ProcessKind[] =
+      site.type === 'laravel' ? ['queue', 'schedule', 'horizon', 'custom'] : site.type === 'angular' ? ['ng-serve', 'custom'] : ['custom'];
+    const existing = new Set(this.processesFor(site.id).map((p) => p.kind));
+    return allowed.filter((kind) => kind === 'custom' || !existing.has(kind));
+  }
+
+  protected stateDot(state: ActiveState): string {
+    if (state === 'active') return 'bg-emerald-400';
+    if (state === 'failed') return 'bg-red-500';
+    if (state === 'activating' || state === 'deactivating' || state === 'reloading') return 'bg-amber-400';
+    return 'bg-zinc-600';
+  }
+
+  protected async addProcess(site: Site, kind: ProcessKind): Promise<void> {
+    const request: CreateProcessRequest = { kind };
+    if (kind === 'custom') {
+      const command = prompt(`Command to run in ${site.root} (e.g. php artisan reverb:start):`)?.trim();
+      if (!command) return;
+      const name = prompt('Short name for it:', command.split(' ').slice(0, 3).join(' '))?.trim();
+      if (!name) return;
+      Object.assign(request, { command, name });
+    }
+    await this.run('update', async () => {
+      const result = await this.daemon.api<SiteProcess>({ method: 'POST', path: `/api/sites/${site.id}/processes`, body: request });
+      this.notice.set(result.ok ? { ok: true, message: `${result.data.name} started for ${site.domain}.` } : { ok: false, message: result.error });
+      await this.loadProcesses();
+    });
+  }
+
+  protected async processAction(p: SiteProcess, action: ProcessAction): Promise<void> {
+    await this.run('update', async () => {
+      const result = await this.daemon.api<SiteProcess>({ method: 'POST', path: `/api/processes/${p.id}/${action}` });
+      if (!result.ok) this.notice.set({ ok: false, message: `${p.name}: ${result.error}` });
+      await this.loadProcesses();
+    });
+  }
+
+  protected async setAutostart(p: SiteProcess, autostart: boolean): Promise<void> {
+    await this.run('update', async () => {
+      const result = await this.daemon.api<SiteProcess>({ method: 'PATCH', path: `/api/processes/${p.id}`, body: { autostart } });
+      if (!result.ok) this.notice.set({ ok: false, message: `${p.name}: ${result.error}` });
+      await this.loadProcesses();
+    });
+  }
+
+  protected async removeProcess(p: SiteProcess): Promise<void> {
+    if (!confirm(`Stop and remove "${p.name}"?`)) return;
+    if (this.logProcess() === p.id) this.toggleLogs(p);
+    await this.run('update', async () => {
+      const result = await this.daemon.api({ method: 'DELETE', path: `/api/processes/${p.id}` });
+      if (!result.ok) this.notice.set({ ok: false, message: result.error });
+      await this.loadProcesses();
+    });
+  }
+
+  protected toggleLogs(p: SiteProcess): void {
+    this.logLines.set([]);
+    if (this.logProcess() === p.id) {
+      this.logProcess.set(null);
+      this.daemon.send({ type: 'logs.unsubscribe' });
+    } else {
+      this.logProcess.set(p.id);
+      this.daemon.send({ type: 'process-logs.subscribe', processId: p.id });
+    }
   }
 
   protected async detect(): Promise<void> {
@@ -285,8 +457,9 @@ export class Sites implements OnInit {
       const d = result.data;
       this.root = d.root;
       this.domain = d.domain;
-      this.type = d.type === 'angular' ? 'static' : d.type;
+      this.type = d.type;
       this.phpVersion = d.phpVersion ?? d.installedPhpVersions.at(-1) ?? '';
+      this.nodeVersion = d.nodeVersion ?? d.installedNodeVersions[0] ?? '';
       this.createDatabase = d.mysqlInstalled;
       this.detected.set(d);
     });
@@ -321,7 +494,8 @@ export class Sites implements OnInit {
       domain,
       root: this.root.trim(),
       type: this.type,
-      phpVersion: this.type === 'static' ? null : this.phpVersion,
+      phpVersion: this.type === 'php' || this.type === 'laravel' ? this.phpVersion : null,
+      nodeVersion: this.type === 'angular' ? this.nodeVersion : null,
       createDatabase: this.type === 'laravel' && this.createDatabase,
     };
     await this.run('create', async () => {
@@ -383,6 +557,11 @@ export class Sites implements OnInit {
     const result = await this.daemon.api<SitesResponse>({ method: 'GET', path: '/api/sites' });
     if (result.ok) this.sites.set(result.data.sites);
     else this.notice.set({ ok: false, message: result.error });
+  }
+
+  private async loadProcesses(): Promise<void> {
+    const result = await this.daemon.api<ProcessesResponse>({ method: 'GET', path: '/api/processes' });
+    if (result.ok) this.processes.set(result.data.processes);
   }
 
   private async loadPhpVersions(): Promise<void> {

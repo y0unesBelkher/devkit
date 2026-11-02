@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.4.0';
+export const DAEMON_VERSION = '0.5.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -192,7 +192,10 @@ export interface CaInfo {
 /** PHP versions DevKit installs from the ondrej/php PPA, oldest first. */
 export const PHP_VERSIONS = ['8.1', '8.2', '8.3', '8.4'] as const;
 
-export type SiteType = 'static' | 'php' | 'laravel';
+export type SiteType = 'static' | 'php' | 'laravel' | 'angular';
+
+/** First port handed to dev servers (EnvKit's Windows-side dev servers sit at 5170+). */
+export const DEV_SERVER_PORT_START = 5300;
 
 export interface Site {
   id: string;
@@ -202,8 +205,12 @@ export interface Site {
   /** Directory nginx serves (`<root>/public` for Laravel). */
   docroot: string;
   type: SiteType;
-  /** PHP-FPM version for php/laravel sites; null for static sites. */
+  /** PHP-FPM version for php/laravel sites; null otherwise. */
   phpVersion: string | null;
+  /** Node version (e.g. "22.12.0") for sites with a dev server; null otherwise. */
+  nodeVersion: string | null;
+  /** Port of the dev server nginx proxies to (Angular); null otherwise. */
+  port: number | null;
   createdAt: number;
 }
 
@@ -222,8 +229,7 @@ export interface SiteDatabase {
 export interface DetectResult {
   /** Resolved project directory. */
   root: string;
-  /** `angular` is recognised but served from milestone 5 on. */
-  type: SiteType | 'angular';
+  type: SiteType;
   domain: string;
   docroot: string;
   /** `require.php` from composer.json, e.g. "^8.2". */
@@ -231,6 +237,11 @@ export interface DetectResult {
   /** Best installed version matching the constraint (or the newest installed). */
   phpVersion: string | null;
   installedPhpVersions: string[];
+  /** From .nvmrc or package.json engines.node, e.g. "^20.19.0 || ^22.12.0". */
+  nodeRequirement: string | null;
+  /** Best installed Node version for the requirement (or the newest installed). */
+  nodeVersion: string | null;
+  installedNodeVersions: string[];
   /** From .env, when it uses MySQL. */
   database: SiteDatabase | null;
   mysqlInstalled: boolean;
@@ -243,8 +254,66 @@ export interface CreateSiteRequest {
   root: string;
   type: SiteType;
   phpVersion?: string | null;
+  nodeVersion?: string | null;
   /** Create the .env database and its user in MySQL. */
   createDatabase?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Site processes: long-running commands per site (ng serve, queue workers, Horizon, …),
+// each a systemd unit running as the project user in the project directory.
+
+export type ProcessKind = 'ng-serve' | 'queue' | 'schedule' | 'horizon' | 'custom';
+
+export const PROCESS_ACTIONS = ['start', 'stop', 'restart'] as const;
+export type ProcessAction = (typeof PROCESS_ACTIONS)[number];
+
+export interface SiteProcess {
+  id: string;
+  siteId: string;
+  kind: ProcessKind;
+  name: string;
+  /** Shell command run in the site root. */
+  command: string;
+  /** Started automatically when WSL boots. */
+  autostart: boolean;
+  unit: string;
+  active: ActiveState;
+}
+
+/** GET /api/processes */
+export interface ProcessesResponse {
+  processes: SiteProcess[];
+}
+
+/** POST /api/sites/:id/processes; queue/schedule/horizon get default commands. */
+export interface CreateProcessRequest {
+  kind: ProcessKind;
+  name?: string;
+  command?: string;
+  autostart?: boolean;
+}
+
+/** PATCH /api/processes/:id */
+export interface UpdateProcessRequest {
+  name?: string;
+  command?: string;
+  autostart?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Node.js (fnm, per project user)
+
+/** GET /api/node */
+export interface NodeInfo {
+  fnmInstalled: boolean;
+  /** Installed versions, newest first ("22.12.0"). */
+  versions: string[];
+}
+
+/** POST /api/node/install: "lts" or a version prefix like "22". */
+export interface InstallNodeRequest {
+  version: string;
 }
 
 export interface CreateSiteResponse {
@@ -338,12 +407,15 @@ export interface ActionResult {
 
 export type ClientMessage =
   | { type: 'logs.subscribe'; serviceId: string; sourceId: string }
-  | { type: 'logs.unsubscribe' };
+  | { type: 'logs.unsubscribe' }
+  | { type: 'process-logs.subscribe'; processId: string };
 
 export type DaemonEvent =
   | { type: 'services'; services: ServiceStatus[] }
   | { type: 'job'; job: Job }
   | { type: 'job.output'; jobId: string; lines: string[] }
+  | { type: 'processes'; processes: SiteProcess[] }
+  | { type: 'process-log'; processId: string; lines: string[] }
   | { type: 'log'; serviceId: string; sourceId: string; lines: string[] }
   /** Emitted by the Electron main process when the socket to the daemon opens or drops. */
   | { type: 'socket'; connected: boolean };

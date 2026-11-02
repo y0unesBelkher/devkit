@@ -5,7 +5,7 @@ import { Hub, type SocketData } from './hub.ts';
 import { JobQueue } from './jobs.ts';
 import { createFetch } from './server.ts';
 import { syncPhpShim } from './sites/php-shim.ts';
-import { syncNetwork } from './sites/sites.ts';
+import { refreshVhosts, syncNetwork } from './sites/sites.ts';
 import { Store } from './store.ts';
 
 if (process.argv.includes('--version')) {
@@ -16,7 +16,7 @@ if (process.argv.includes('--version')) {
 const config = loadConfig();
 const token = ensureToken(paths.token);
 const store = new Store(paths.stateDb);
-const hub = new Hub();
+const hub = new Hub(store);
 const jobs = new JobQueue({
   onJob: (job) => hub.broadcast({ type: 'job', job }),
   onOutput: (jobId, lines) => hub.broadcast({ type: 'job.output', jobId, lines }),
@@ -39,10 +39,16 @@ console.log(`devkitd ${DAEMON_VERSION} listening on ${server.url} (project user:
 syncPhpShim(store.listSites());
 
 // WSL gets a new IP on every restart; point nginx at it before anyone opens a site.
-syncNetwork(store).then(
-  (network) => console.log(`network: ${network.mode} mode, WSL IP ${network.wslIp ?? 'unknown'}`),
-  (e) => console.error('network sync failed:', e),
-);
+// Then bring every vhost up to the current templates (they may have changed in this version).
+syncNetwork(store)
+  .then((network) => {
+    console.log(`network: ${network.mode} mode, WSL IP ${network.wslIp ?? 'unknown'}`);
+    return refreshVhosts(store, config.user);
+  })
+  .then(
+    (updated) => updated.length && console.log(`updated vhosts: ${updated.join(', ')}`),
+    (e) => console.error('startup sync failed:', e),
+  );
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {

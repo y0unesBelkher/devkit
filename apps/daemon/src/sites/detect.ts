@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join } from 'node:path/posix';
 import { PHP_VERSIONS, SITE_TLD, type DetectResult, type SiteType } from '@devkit/shared';
+import { listNodeVersions, pickNodeVersion } from '../node/fnm.ts';
 import { installedPackages } from '../services/system-tools.ts';
 import { databaseFromEnv, readDotEnv } from './dotenv.ts';
 import { pickPhpVersion } from './php-constraint.ts';
@@ -8,6 +9,27 @@ import { resolveRoot } from './root.ts';
 
 interface ComposerJson {
   require?: Record<string, string>;
+}
+
+interface PackageJson {
+  engines?: { node?: string };
+}
+
+/** Node requirement from .nvmrc / .node-version, else package.json engines.node. */
+export function nodeRequirement(root: string): string | null {
+  for (const file of ['.nvmrc', '.node-version']) {
+    try {
+      const value = readFileSync(join(root, file), 'utf8').trim();
+      if (value) return value;
+    } catch {
+      // Not there.
+    }
+  }
+  try {
+    return (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as PackageJson).engines?.node ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function readComposer(root: string): ComposerJson | null {
@@ -24,7 +46,7 @@ export function domainFromFolder(root: string): string {
   return `${label}.${SITE_TLD}`;
 }
 
-export function detectType(root: string): DetectResult['type'] {
+export function detectType(root: string): SiteType {
   const composer = readComposer(root);
   if (existsSync(join(root, 'artisan')) && composer?.require?.['laravel/framework']) return 'laravel';
   if (existsSync(join(root, 'angular.json'))) return 'angular';
@@ -48,7 +70,7 @@ export async function mysqlInstalled(): Promise<boolean> {
   return (await installedPackages(['mysql-server'])).has('mysql-server');
 }
 
-export async function detectProject(requestedRoot: string): Promise<DetectResult> {
+export async function detectProject(requestedRoot: string, user: string): Promise<DetectResult> {
   const root = resolveRoot(requestedRoot);
   const type = detectType(root);
   const [phpInstalled, hasMysql] = await Promise.all([installedPhpVersions(), mysqlInstalled()]);
@@ -56,9 +78,16 @@ export async function detectProject(requestedRoot: string): Promise<DetectResult
   const constraint = usesPhp ? (readComposer(root)?.require?.['php'] ?? null) : null;
   const phpVersion = usesPhp ? pickPhpVersion(constraint, phpInstalled) : null;
   const database = type === 'laravel' ? databaseFromEnv(readDotEnv(root)) : null;
+  const nodeInstalled = listNodeVersions(user);
+  const nodeWanted = type === 'angular' ? nodeRequirement(root) : null;
+  const nodeVersion = type === 'angular' ? pickNodeVersion(nodeWanted, nodeInstalled) : null;
   const warnings: string[] = [];
 
-  if (type === 'angular') warnings.push('Angular projects are served from the next milestone on (ng serve behind nginx).');
+  if (type === 'angular') {
+    if (nodeInstalled.length === 0) warnings.push('Node.js is not installed yet. Install it on the Tools page.');
+    else if (!nodeVersion) warnings.push(`The project needs Node ${nodeWanted}, which no installed version satisfies (Tools page).`);
+    if (!existsSync(join(root, 'node_modules'))) warnings.push('node_modules/ is missing: run "npm install" in the project.');
+  }
   if (usesPhp && phpInstalled.length === 0) {
     warnings.push('No PHP version is installed yet. Install one on the Services page.');
   } else if (usesPhp && !phpVersion) {
@@ -80,10 +109,13 @@ export async function detectProject(requestedRoot: string): Promise<DetectResult
     root,
     type,
     domain: domainFromFolder(root),
-    docroot: type === 'angular' ? root : docrootFor(type, root),
+    docroot: docrootFor(type, root),
     phpConstraint: constraint,
     phpVersion,
     installedPhpVersions: phpInstalled,
+    nodeRequirement: nodeWanted,
+    nodeVersion,
+    installedNodeVersions: nodeInstalled,
     // Never send the password to the UI.
     database: database
       ? { connection: database.connection, name: database.name, username: database.username, hasPassword: database.hasPassword }

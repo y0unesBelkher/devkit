@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join } from 'node:path/posix';
 import type { SiteDatabase } from '@devkit/shared';
 
 /** Parses a .env file: KEY=value, optional `export`, quotes, and trailing comments on unquoted values. */

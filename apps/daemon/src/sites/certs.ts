@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path/posix';
 import { DAEMON_PATHS, type CaInfo } from '@devkit/shared';
 import { run } from '../exec.ts';
 

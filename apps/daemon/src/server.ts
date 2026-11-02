@@ -1,13 +1,21 @@
 import type { Server } from 'bun';
+import { existsSync } from 'node:fs';
 import {
   DAEMON_VERSION,
+  PROCESS_ACTIONS,
   SERVICE_ACTIONS,
   type ApiError,
+  type CreateProcessRequest,
   type CreateSiteRequest,
   type DaemonConfig,
   type DetectRequest,
+  type InstallNodeRequest,
+  type NodeInfo,
+  type ProcessAction,
+  type ProcessesResponse,
   type SetNetworkRequest,
   type SitesResponse,
+  type UpdateProcessRequest,
   type UpdateSiteRequest,
   type JobsResponse,
   type LogsResponse,
@@ -31,8 +39,18 @@ import {
 } from './services/services.ts';
 import { getCaInfo } from './sites/certs.ts';
 import { getNetworkInfo } from './sites/network.ts';
+import { FNM_BIN, installNode, listNodeVersions, validateNodeVersion } from './node/fnm.ts';
 import { detectProject } from './sites/detect.ts';
-import { changeListenMode, createSite, deleteSite, setSitePhpVersion } from './sites/sites.ts';
+import { getProcess, listProcesses, processAction } from './sites/processes.ts';
+import {
+  changeListenMode,
+  createProcess,
+  createSite,
+  deleteProcess,
+  deleteSite,
+  setSitePhpVersion,
+  updateProcess,
+} from './sites/sites.ts';
 import type { Store } from './store.ts';
 import { getSystemInfo } from './system.ts';
 
@@ -88,7 +106,7 @@ const routes: Route[] = [
     method: 'POST',
     path: '/api/system/repair-packages',
     handler: ({ ctx }) =>
-      json(ctx.jobs.enqueue('Repair package system', repairPackages, () => void ctx.hub.refreshServices()), 202),
+      json(ctx.jobs.enqueue('Repair package system', repairPackages, () => void ctx.hub.refresh()), 202),
   },
   {
     method: 'GET',
@@ -104,12 +122,12 @@ const routes: Route[] = [
       if (action === 'install' || action === 'uninstall') {
         const verb = action === 'install' ? 'Install' : 'Uninstall';
         const work = action === 'install' ? installService : uninstallService;
-        const job = ctx.jobs.enqueue(`${verb} ${def.name}`, (jobCtx) => work(def, jobCtx), () => void ctx.hub.refreshServices());
+        const job = ctx.jobs.enqueue(`${verb} ${def.name}`, (jobCtx) => work(def, jobCtx), () => void ctx.hub.refresh());
         return json(job, 202);
       }
       if (!(SERVICE_ACTIONS as readonly string[]).includes(action)) throw new HttpError(404, `Unknown action "${action}"`);
       const status = await runServiceAction(def, action as ServiceAction);
-      void ctx.hub.refreshServices();
+      void ctx.hub.refresh();
       return json(status);
     },
   },
@@ -159,9 +177,70 @@ const routes: Route[] = [
   {
     method: 'POST',
     path: '/api/sites/detect',
-    handler: async ({ request }) => {
+    handler: async ({ request, ctx }) => {
       const body = await readJson<DetectRequest>(request);
-      return json(await detectProject(String(body.root ?? '').trim()));
+      return json(await detectProject(String(body.root ?? '').trim(), ctx.config.user));
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/processes',
+    handler: async ({ ctx }) => json({ processes: await listProcesses(ctx.store) } satisfies ProcessesResponse),
+  },
+  {
+    method: 'POST',
+    path: '/api/sites/:id/processes',
+    handler: async ({ request, params, ctx }) => {
+      const body = await readJson<CreateProcessRequest>(request);
+      const process = await createProcess(ctx.store, ctx.config.user, params['id'] ?? '', body);
+      void ctx.hub.refresh();
+      return json(process, 201);
+    },
+  },
+  {
+    method: 'PATCH',
+    path: '/api/processes/:id',
+    handler: async ({ request, params, ctx }) => {
+      const body = await readJson<UpdateProcessRequest>(request);
+      const process = await updateProcess(ctx.store, ctx.config.user, params['id'] ?? '', body);
+      void ctx.hub.refresh();
+      return json(process);
+    },
+  },
+  {
+    method: 'DELETE',
+    path: '/api/processes/:id',
+    handler: async ({ params, ctx }) => {
+      await deleteProcess(ctx.store, params['id'] ?? '');
+      void ctx.hub.refresh();
+      return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/processes/:id/:action',
+    handler: async ({ params, ctx }) => {
+      const id = params['id'] ?? '';
+      const action = params['action'] ?? '';
+      if (!(PROCESS_ACTIONS as readonly string[]).includes(action)) throw new HttpError(404, `Unknown action "${action}"`);
+      if (!ctx.store.getProcess(id)) throw new HttpError(404, 'Unknown process');
+      await processAction(id, action as ProcessAction);
+      void ctx.hub.refresh();
+      return json(await getProcess(ctx.store, id));
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/node',
+    handler: ({ ctx }) => json({ fnmInstalled: existsSync(FNM_BIN), versions: listNodeVersions(ctx.config.user) } satisfies NodeInfo),
+  },
+  {
+    method: 'POST',
+    path: '/api/node/install',
+    handler: async ({ request, ctx }) => {
+      const body = await readJson<InstallNodeRequest>(request);
+      const version = validateNodeVersion(String(body.version ?? '').trim());
+      return json(ctx.jobs.enqueue(`Install Node ${version}`, (jobCtx) => installNode(jobCtx, ctx.config.user, version)), 202);
     },
   },
   {

@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute } from 'node:path/posix';
 import { HttpError } from '../http-error.ts';
 
 /** Checks a requested project directory; returns its resolved path. */

@@ -77,9 +77,9 @@ export class ServicesStore {
   }
 
   /** Starts a job that is not tied to one service (e.g. package repair); returns its id. */
-  async startJob(path: string): Promise<string | null> {
+  async startJob(path: string, body?: unknown): Promise<string | null> {
     this.error.set(null);
-    const result = await this.daemon.api<Job>({ method: 'POST', path });
+    const result = await this.daemon.api<Job>({ method: 'POST', path, body });
     if (!result.ok) {
       this.error.set(result.error);
       return null;

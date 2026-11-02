@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname } from 'node:path/posix';
 
 /** Returns the API token, creating it (mode 0600) on first start. */
 export function ensureToken(file: string): string {
