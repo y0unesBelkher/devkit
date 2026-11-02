@@ -4,6 +4,8 @@ import { loadConfig, paths } from './config.ts';
 import { Hub, type SocketData } from './hub.ts';
 import { JobQueue } from './jobs.ts';
 import { createFetch } from './server.ts';
+import { syncNetwork } from './sites/sites.ts';
+import { Store } from './store.ts';
 
 if (process.argv.includes('--version')) {
   console.log(DAEMON_VERSION);
@@ -12,6 +14,7 @@ if (process.argv.includes('--version')) {
 
 const config = loadConfig();
 const token = ensureToken(paths.token);
+const store = new Store(paths.stateDb);
 const hub = new Hub();
 const jobs = new JobQueue({
   onJob: (job) => hub.broadcast({ type: 'job', job }),
@@ -22,7 +25,7 @@ const jobs = new JobQueue({
 const server = Bun.serve<SocketData>({
   hostname: '127.0.0.1',
   port: config.port,
-  fetch: createFetch({ config, token, startedAt: Date.now(), jobs, hub }),
+  fetch: createFetch({ config, token, startedAt: Date.now(), jobs, hub, store }),
   websocket: {
     open: (ws) => hub.add(ws),
     message: (ws, message) => hub.handleMessage(ws, message),
@@ -31,6 +34,12 @@ const server = Bun.serve<SocketData>({
 });
 
 console.log(`devkitd ${DAEMON_VERSION} listening on ${server.url} (project user: ${config.user})`);
+
+// WSL gets a new IP on every restart; point nginx at it before anyone opens a site.
+syncNetwork(store).then(
+  (network) => console.log(`network: ${network.mode} mode, WSL IP ${network.wslIp ?? 'unknown'}`),
+  (e) => console.error('network sync failed:', e),
+);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {

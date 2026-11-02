@@ -3,7 +3,10 @@ import {
   DAEMON_VERSION,
   SERVICE_ACTIONS,
   type ApiError,
+  type CreateSiteRequest,
   type DaemonConfig,
+  type SetNetworkRequest,
+  type SitesResponse,
   type JobsResponse,
   type LogsResponse,
   type PingResponse,
@@ -24,6 +27,10 @@ import {
   runServiceAction,
   uninstallService,
 } from './services/services.ts';
+import { getCaInfo } from './sites/certs.ts';
+import { getNetworkInfo } from './sites/network.ts';
+import { changeListenMode, createSite, deleteSite } from './sites/sites.ts';
+import type { Store } from './store.ts';
 import { getSystemInfo } from './system.ts';
 
 export interface ServerContext {
@@ -32,6 +39,7 @@ export interface ServerContext {
   startedAt: number;
   jobs: JobQueue;
   hub: Hub;
+  store: Store;
 }
 
 interface RouteRequest {
@@ -50,6 +58,16 @@ interface Route {
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
+
+async function readJson<T>(request: Request): Promise<T> {
+  try {
+    const body = (await request.json()) as unknown;
+    if (body && typeof body === 'object') return body as T;
+  } catch {
+    // Fall through.
+  }
+  throw new HttpError(400, 'Expected a JSON object body');
+}
 
 const routes: Route[] = [
   {
@@ -102,6 +120,45 @@ const routes: Route[] = [
       const result = await run(logCommand(def, sourceId, lines, false), { timeoutMs: 15_000 });
       const text = (result.stdout || result.stderr).replace(/\n$/, '');
       return json({ serviceId: def.id, sourceId, lines: text ? text.split('\n') : [] } satisfies LogsResponse);
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/network',
+    handler: async ({ ctx }) => json(await getNetworkInfo(ctx.store)),
+  },
+  {
+    method: 'PUT',
+    path: '/api/network',
+    handler: async ({ request, ctx }) => {
+      const body = await readJson<SetNetworkRequest>(request);
+      return json(await changeListenMode(ctx.store, body.mode));
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/ca',
+    handler: async () => json(await getCaInfo()),
+  },
+  {
+    method: 'GET',
+    path: '/api/sites',
+    handler: ({ ctx }) => json({ sites: ctx.store.listSites() } satisfies SitesResponse),
+  },
+  {
+    method: 'POST',
+    path: '/api/sites',
+    handler: async ({ request, ctx }) => {
+      const body = await readJson<CreateSiteRequest>(request);
+      return json(await createSite(ctx.store, ctx.config.user, body), 201);
+    },
+  },
+  {
+    method: 'DELETE',
+    path: '/api/sites/:id',
+    handler: async ({ params, ctx }) => {
+      await deleteSite(ctx.store, params['id'] ?? '');
+      return new Response(null, { status: 204 });
     },
   },
   {

@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { Dashboard } from './pages/dashboard';
 import { ComingSoon } from './pages/coming-soon';
 import { Services } from './pages/services';
+import { Sites } from './pages/sites';
 
 export interface NavItem {
   path: string;
@@ -12,7 +13,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { path: 'dashboard', label: 'Dashboard' },
   { path: 'services', label: 'Services' },
-  { path: 'sites', label: 'Sites', milestone: 4 },
+  { path: 'sites', label: 'Sites' },
   { path: 'groups', label: 'Groups', milestone: 7 },
   { path: 'tools', label: 'Tools', milestone: 6 },
   { path: 'databases', label: 'Databases', milestone: 7 },
@@ -24,6 +25,7 @@ export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
   { path: 'dashboard', component: Dashboard, title: 'Dashboard · DevKit' },
   { path: 'services', component: Services, title: 'Services · DevKit' },
+  { path: 'sites', component: Sites, title: 'Sites · DevKit' },
   ...NAV.filter((item) => item.milestone !== undefined || item.path === 'settings').map((item) => ({
     path: item.path,
     component: ComingSoon,

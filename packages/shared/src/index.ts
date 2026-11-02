@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.2.0';
+export const DAEMON_VERSION = '0.3.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -15,7 +15,14 @@ export const DAEMON_PATHS = {
   config: '/etc/devkit/config.json',
   token: '/etc/devkit/token',
   stateDir: '/var/lib/devkit',
+  stateDb: '/var/lib/devkit/state.db',
+  caDir: '/etc/devkit/ca',
+  certsDir: '/etc/devkit/certs',
+  nginxIncludes: '/etc/nginx/devkit',
 } as const;
+
+/** Top-level domain for every site. */
+export const SITE_TLD = 'test';
 
 /** Written by the desktop bootstrap; read by the daemon at startup. */
 export interface DaemonConfig {
@@ -147,6 +154,133 @@ export interface JobsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Networking: how the Windows browser reaches nginx inside WSL
+
+/**
+ * - `wsl-ip`: nginx listens only on WSL's NAT IP and hosts entries point there. Coexists with another
+ *   stack (EnvKit) that owns 80/443 on Windows; hosts entries change when WSL's IP changes.
+ * - `localhost`: nginx listens on all addresses, WSL forwards 127.0.0.1:80/443, hosts entries use 127.0.0.1.
+ */
+export type ListenMode = 'wsl-ip' | 'localhost';
+
+/** GET/PUT /api/network */
+export interface NetworkInfo {
+  mode: ListenMode;
+  wslIp: string | null;
+  /** IP the Windows hosts entries must point at. */
+  hostsTarget: string | null;
+}
+
+export interface SetNetworkRequest {
+  mode: ListenMode;
+}
+
+/** GET /api/ca: the local certificate authority that signs every site certificate. */
+export interface CaInfo {
+  pem: string;
+  /** SHA-1 of the DER certificate, uppercase hex; matches the Windows certificate store thumbprint. */
+  thumbprint: string;
+  subject: string;
+  notAfter: string;
+}
+
+// ---------------------------------------------------------------------------
+// Sites
+
+export type SiteType = 'static';
+
+export interface Site {
+  id: string;
+  domain: string;
+  /** Absolute directory nginx serves, on the Linux filesystem. */
+  root: string;
+  type: SiteType;
+  createdAt: number;
+}
+
+/** POST /api/sites */
+export interface CreateSiteRequest {
+  domain: string;
+  root: string;
+  type: SiteType;
+}
+
+/** GET /api/sites */
+export interface SitesResponse {
+  sites: Site[];
+}
+
+const DOMAIN_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Returns an error message, or null when `domain` is a valid single-label site name like `lv-oms.test`. */
+export function validateDomain(domain: string): string | null {
+  const suffix = `.${SITE_TLD}`;
+  if (!domain.endsWith(suffix)) return `Domain must end with ${suffix}`;
+  const label = domain.slice(0, -suffix.length);
+  if (!DOMAIN_LABEL.test(label)) return 'Use lowercase letters, digits and dashes (e.g. lv-oms.test)';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Windows hosts file block (written by the desktop app, rendered here so it can be tested)
+
+export const HOSTS_BEGIN = '# BEGIN DevKit - managed by the DevKit app, do not edit';
+export const HOSTS_END = '# END DevKit';
+
+export interface HostsEntry {
+  ip: string;
+  domain: string;
+}
+
+/** Replaces (or appends) the DevKit block in a hosts file, keeping everything else and its line endings. */
+export function applyHostsBlock(content: string, entries: HostsEntry[]): string {
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = content.split(/\r?\n/);
+  const begin = lines.indexOf(HOSTS_BEGIN);
+  const end = begin === -1 ? -1 : lines.indexOf(HOSTS_END, begin);
+  const outside = begin === -1 || end === -1 ? lines : [...lines.slice(0, begin), ...lines.slice(end + 1)];
+  while (outside.length && outside[outside.length - 1] === '') outside.pop();
+  const block = entries.length
+    ? ['', HOSTS_BEGIN, ...[...entries].sort((a, b) => a.domain.localeCompare(b.domain)).map((e) => `${e.ip} ${e.domain}`), HOSTS_END]
+    : [];
+  return [...outside, ...block, ''].join(eol);
+}
+
+/** Domains that already resolve through a line outside the DevKit block (e.g. EnvKit's), which would shadow ours. */
+export function hostsConflicts(content: string, domains: string[]): string[] {
+  const lines = content.split(/\r?\n/);
+  const begin = lines.indexOf(HOSTS_BEGIN);
+  const end = begin === -1 ? -1 : lines.indexOf(HOSTS_END, begin);
+  const outside = new Set<string>();
+  lines.forEach((line, i) => {
+    if (begin !== -1 && end !== -1 && i >= begin && i <= end) return;
+    const [ip, ...names] = line.replace(/#.*/, '').trim().split(/\s+/);
+    if (ip) names.forEach((name) => outside.add(name.toLowerCase()));
+  });
+  return domains.filter((domain) => outside.has(domain));
+}
+
+/** State of the Windows side, gathered by the desktop app. */
+export interface WindowsStatus {
+  network: NetworkInfo;
+  /** Mode suggested by who owns ports 80/443 on Windows. */
+  recommendedMode: ListenMode;
+  /** Non-WSL processes listening on 80/443 on Windows (e.g. EnvKit's nginx). */
+  portOwners: { port: number; process: string }[];
+  ca: { thumbprint: string; trusted: boolean } | null;
+  hosts: {
+    inSync: boolean;
+    /** Domains defined outside the DevKit block, which win over ours. */
+    conflicts: string[];
+  };
+}
+
+export interface ActionResult {
+  ok: boolean;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
 // Live events over the daemon WebSocket (/api/ws), relayed by the Electron main process
 
 export type ClientMessage =
@@ -171,4 +305,10 @@ export interface DevkitBridge {
   /** Subscribes to live daemon events; returns an unsubscribe function. */
   onEvent(listener: (event: DaemonEvent) => void): () => void;
   send(message: ClientMessage): void;
+  windowsStatus(): Promise<WindowsStatus>;
+  /** Adds the DevKit CA to the current user's trusted roots (Windows shows a confirmation dialog). */
+  trustCa(): Promise<ActionResult>;
+  /** Rewrites the DevKit block of the hosts file from the daemon's sites (one UAC prompt when it changes). */
+  syncHosts(): Promise<ActionResult>;
+  setListenMode(mode: ListenMode): Promise<ActionResult>;
 }

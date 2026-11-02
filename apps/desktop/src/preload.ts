@@ -13,6 +13,10 @@ const bridge: DevkitBridge = {
     return () => ipcRenderer.off('devkit:event', handler);
   },
   send: (message) => ipcRenderer.send('devkit:ws-send', message),
+  windowsStatus: () => ipcRenderer.invoke('devkit:windows-status'),
+  trustCa: () => ipcRenderer.invoke('devkit:trust-ca'),
+  syncHosts: () => ipcRenderer.invoke('devkit:sync-hosts'),
+  setListenMode: (mode) => ipcRenderer.invoke('devkit:set-listen-mode', mode),
 };
 
 contextBridge.exposeInMainWorld('devkit', bridge);

@@ -23,7 +23,19 @@ Headless helpers (run from `apps/desktop` after `npm run build:desktop`):
 ```bash
 npx electron . --status           # print the daemon connection state as JSON
 npx electron . --install-daemon   # install or upgrade devkitd in the Ubuntu distro
+npx electron . --windows-status   # CA trust, hosts file and port-owner status
+npx electron . --trust-ca         # trust the DevKit CA for the current Windows user (confirmation dialog)
+npx electron . --sync-hosts       # rewrite the DevKit block of the hosts file (UAC prompt)
 ```
+
+## Sites and networking
+
+- Each site gets `<name>.test`, a certificate signed by DevKit's local CA (`/etc/devkit/ca`), and
+  `/etc/nginx/sites-available/devkit-<domain>.conf`. nginx workers run as the project user.
+- **WSL IP mode** (default): nginx listens only on WSL's NAT IP, so another stack (EnvKit) keeps
+  `127.0.0.1:80/443` on Windows; hosts entries point at the WSL IP and need updating when WSL restarts.
+- **127.0.0.1 mode**: nginx listens on all addresses and WSL forwards `127.0.0.1` into it. Switch on the
+  Sites page once nothing else holds ports 80/443 on Windows.
 
 ## How it fits together
 

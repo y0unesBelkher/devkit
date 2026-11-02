@@ -5,6 +5,7 @@ import { DAEMON_PATHS, DAEMON_PORT, type DaemonConfig } from '@devkit/shared';
 export const paths = {
   config: process.env.DEVKIT_CONFIG ?? DAEMON_PATHS.config,
   token: process.env.DEVKIT_TOKEN_FILE ?? DAEMON_PATHS.token,
+  stateDb: process.env.DEVKIT_STATE_DB ?? DAEMON_PATHS.stateDb,
 };
 
 export function loadConfig(file = paths.config): DaemonConfig {

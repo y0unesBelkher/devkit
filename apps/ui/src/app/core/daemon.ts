@@ -73,6 +73,12 @@ export class Daemon {
     await this.refresh();
   }
 
+  /** Windows-side actions; only callable inside the desktop app (pages check `inDesktopApp`). */
+  get windows(): Pick<DevkitBridge, 'windowsStatus' | 'trustCa' | 'syncHosts' | 'setListenMode'> {
+    if (!this.bridge) throw new Error('Not running inside the DevKit desktop app');
+    return this.bridge;
+  }
+
   api<T>(request: ApiRequest): Promise<ApiResult<T>> {
     if (!this.bridge) return Promise.resolve({ ok: false, status: 0, error: 'Not running inside the DevKit desktop app' });
     return this.bridge.api<T>(request);
