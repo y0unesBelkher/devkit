@@ -1,9 +1,10 @@
 import { join, resolve } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import type { ApiRequest, ClientMessage, ListenMode } from '@devkit/shared';
+import type { ApiRequest, ClientMessage, ListenMode, OpenTarget } from '@devkit/shared';
 import { installDaemon } from './bootstrap';
 import { api, connectionState } from './daemon-client';
 import { DaemonSocket } from './daemon-socket';
+import { openPath, pickFile } from './shell-actions';
 import { setListenMode, syncHosts, trustCa, windowsStatus } from './windows';
 
 const devServerUrl = process.env['DEVKIT_UI_URL'] ?? (app.isPackaged ? null : 'http://localhost:4200');
@@ -57,6 +58,8 @@ function registerIpc(): void {
   ipcMain.handle('devkit:trust-ca', () => trustCa());
   ipcMain.handle('devkit:sync-hosts', () => syncHosts());
   ipcMain.handle('devkit:set-listen-mode', (_event, mode: ListenMode) => setListenMode(mode));
+  ipcMain.handle('devkit:open-path', (_event, target: OpenTarget, path: string) => openPath(target, path));
+  ipcMain.handle('devkit:pick-file', (_event, mode: 'open' | 'save', defaultName?: string) => pickFile(mode, defaultName));
 }
 
 /** Headless flags (`electron . --status`): run one step without a window, print JSON, exit non-zero on failure. */

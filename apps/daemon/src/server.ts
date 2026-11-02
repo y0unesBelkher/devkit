@@ -6,10 +6,16 @@ import {
   PROCESS_ACTIONS,
   SERVICE_ACTIONS,
   type ApiError,
+  type CreateDatabaseRequest,
   type CreateProcessRequest,
   type CreateSiteRequest,
   type DaemonConfig,
+  type DatabaseFileRequest,
+  type DatabasesResponse,
   type DetectRequest,
+  type FileOpRequest,
+  type GroupRequest,
+  type GroupsResponse,
   type InstallNodeRequest,
   type NodeGlobalRequest,
   type NodeInfo,
@@ -17,6 +23,7 @@ import {
   type ProcessAction,
   type ProcessesResponse,
   type SetNetworkRequest,
+  type SetSiteGroupRequest,
   type SitesResponse,
   type ToolsInfo,
   type UpdateProcessRequest,
@@ -44,7 +51,19 @@ import {
 import { getCaInfo } from './sites/certs.ts';
 import { getNetworkInfo } from './sites/network.ts';
 import { FNM_BIN, installNode, listNodeVersions, validateNodeVersion } from './node/fnm.ts';
+import { adminerStatus, disableAdminer, enableAdminer } from './databases/adminer.ts';
+import {
+  createDatabase,
+  dropDatabase,
+  exportDatabase,
+  importDatabase,
+  listDatabases,
+  mysqlState,
+  prepareDump,
+} from './databases/databases.ts';
+import { fileOperation, listFiles, previewFile } from './files/files.ts';
 import { detectProject, installedPhpVersions } from './sites/detect.ts';
+import { assignSite, createGroup, groupAction, renameGroup, requireGroup } from './sites/groups.ts';
 import { composerVersion, installComposer } from './tools/composer.ts';
 import { applyUpdates, healthCheck, refreshPackageLists, toolUpdates, uninstallNode } from './tools/maintenance.ts';
 import { changeGlobal, nodeToolInfo, requireNodeVersion, validatePackageName } from './tools/npm-globals.ts';
@@ -362,6 +381,128 @@ const routes: Route[] = [
         ctx.jobs.enqueue(title, (job) => applyUpdates(job, ctx.config.user, body.target, nodeVersion), () => void ctx.hub.refresh()),
         202,
       );
+    },
+  },
+  // Groups
+  {
+    method: 'GET',
+    path: '/api/groups',
+    handler: ({ ctx }) => json({ groups: ctx.store.listGroups() } satisfies GroupsResponse),
+  },
+  {
+    method: 'POST',
+    path: '/api/groups',
+    handler: async ({ request, ctx }) => json(createGroup(ctx.store, (await readJson<GroupRequest>(request)).name), 201),
+  },
+  {
+    method: 'PATCH',
+    path: '/api/groups/:id',
+    handler: async ({ request, params, ctx }) =>
+      json(renameGroup(ctx.store, params['id'] ?? '', (await readJson<GroupRequest>(request)).name)),
+  },
+  {
+    method: 'DELETE',
+    path: '/api/groups/:id',
+    handler: ({ params, ctx }) => {
+      requireGroup(ctx.store, params['id'] ?? '');
+      ctx.store.deleteGroup(params['id'] ?? '');
+      return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/groups/:id/:action',
+    handler: async ({ params, ctx }) => {
+      const action = params['action'] ?? '';
+      if (!(PROCESS_ACTIONS as readonly string[]).includes(action)) throw new HttpError(404, `Unknown action "${action}"`);
+      const result = await groupAction(ctx.store, params['id'] ?? '', action as ProcessAction);
+      void ctx.hub.refresh();
+      return json(result);
+    },
+  },
+  {
+    method: 'PUT',
+    path: '/api/sites/:id/group',
+    handler: async ({ request, params, ctx }) => {
+      const body = await readJson<SetSiteGroupRequest>(request);
+      assignSite(ctx.store, params['id'] ?? '', body.groupId ?? null);
+      return json({ groups: ctx.store.listGroups() } satisfies GroupsResponse);
+    },
+  },
+  // Databases
+  {
+    method: 'GET',
+    path: '/api/databases',
+    handler: async ({ ctx }) => {
+      const state = await mysqlState();
+      return json({
+        mysqlInstalled: state.installed,
+        mysqlRunning: state.running,
+        databases: state.running ? await listDatabases() : [],
+        adminer: state.installed ? adminerStatus(ctx.store) : null,
+      } satisfies DatabasesResponse);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/databases',
+    handler: async ({ request }) => {
+      const name = String((await readJson<CreateDatabaseRequest>(request)).name ?? '').trim();
+      await createDatabase(name);
+      return json({ name }, 201);
+    },
+  },
+  {
+    method: 'DELETE',
+    path: '/api/databases/:name',
+    handler: async ({ params }) => {
+      await dropDatabase(params['name'] ?? '');
+      return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/databases/:name/:direction',
+    handler: async ({ request, params, ctx }) => {
+      const name = params['name'] ?? '';
+      const direction = params['direction'];
+      if (direction !== 'import' && direction !== 'export') throw new HttpError(404, `Unknown action "${direction}"`);
+      const file = await prepareDump(name, String((await readJson<DatabaseFileRequest>(request)).file ?? ''), direction);
+      const title = direction === 'import' ? `Import into ${name}` : `Export ${name}`;
+      const work = direction === 'import' ? importDatabase : exportDatabase;
+      return json(ctx.jobs.enqueue(title, (job) => work(job, name, file)), 202);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/adminer',
+    handler: ({ ctx }) => json(ctx.jobs.enqueue('Set up Adminer', (job) => enableAdminer(job, ctx.store, ctx.config.user)), 202),
+  },
+  {
+    method: 'DELETE',
+    path: '/api/adminer',
+    handler: async ({ ctx }) => {
+      await disableAdminer(ctx.store);
+      return new Response(null, { status: 204 });
+    },
+  },
+  // Files (as the project user)
+  {
+    method: 'GET',
+    path: '/api/files',
+    handler: async ({ url, ctx }) => json(await listFiles(ctx.config.user, url.searchParams.get('path') ?? undefined)),
+  },
+  {
+    method: 'GET',
+    path: '/api/files/preview',
+    handler: async ({ url, ctx }) => json(await previewFile(ctx.config.user, url.searchParams.get('path') ?? '')),
+  },
+  {
+    method: 'POST',
+    path: '/api/files/:op',
+    handler: async ({ request, params, ctx }) => {
+      await fileOperation(ctx.config.user, params['op'] ?? '', await readJson<FileOpRequest>(request));
+      return new Response(null, { status: 204 });
     },
   },
   {

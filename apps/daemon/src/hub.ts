@@ -4,6 +4,7 @@ import { streamLines, type LineStream } from './exec.ts';
 import { findService } from './services/catalog.ts';
 import { logCommand } from './services/logs.ts';
 import { listServices } from './services/services.ts';
+import { formatJournalJson, groupUnits } from './sites/groups.ts';
 import { listProcesses, unitName } from './sites/processes.ts';
 import type { Store } from './store.ts';
 
@@ -81,6 +82,27 @@ export class Hub {
     if (message.type === 'logs.unsubscribe') this.stopLogs(ws);
     else if (message.type === 'logs.subscribe') this.startServiceLogs(ws, message.serviceId, message.sourceId);
     else if (message.type === 'process-logs.subscribe') this.startProcessLogs(ws, message.processId);
+    else if (message.type === 'group-logs.subscribe') this.startGroupLogs(ws, message.groupId);
+  }
+
+  /** Every process of every site in the group, interleaved and labelled. */
+  private startGroupLogs(ws: Socket, groupId: string): void {
+    const send = (lines: string[]) => {
+      if (lines.length) ws.send(JSON.stringify({ type: 'group-log', groupId, lines } satisfies DaemonEvent));
+    };
+    let labels = new Map<string, string>();
+    try {
+      labels = groupUnits(this.store, groupId);
+    } catch (e) {
+      return send([`[devkit] ${e instanceof Error ? e.message : String(e)}`]);
+    }
+    if (labels.size === 0) return send(['[devkit] No processes in this group yet. Add ng serve, queue workers or Horizon on the Sites page.']);
+    const units = [...labels.keys()].flatMap((unit) => ['-u', unit]);
+    this.stream(
+      ws,
+      (lines) => send(lines.map((line) => formatJournalJson(line, labels)).filter((line): line is string => line !== null)),
+      () => ['journalctl', ...units, '-n', String(INITIAL_LOG_LINES), '--no-pager', '-o', 'json', '-f'],
+    );
   }
 
   private startServiceLogs(ws: Socket, serviceId: string, sourceId: string): void {

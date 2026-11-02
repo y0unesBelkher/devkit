@@ -5,11 +5,11 @@ import type { DatabaseCredentials } from './dotenv.ts';
 const NAME = /^[A-Za-z0-9_$-]{1,64}$/;
 const USER = /^[A-Za-z0-9_.-]{1,32}$/;
 
-const sqlString = (value: string) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-const sqlIdent = (value: string) => `\`${value.replace(/`/g, '``')}\``;
+export const sqlString = (value: string) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+export const sqlIdent = (value: string) => `\`${value.replace(/`/g, '``')}\``;
 
 /** Runs SQL as MySQL's root over the unix socket (auth_socket: the root daemon needs no password). */
-async function mysql(sql: string): Promise<string> {
+export async function mysql(sql: string): Promise<string> {
   const result = await run(['mysql', '--protocol=socket', '-uroot', '--batch', '--skip-column-names', '-e', sql], { timeoutMs: 60_000 });
   if (result.code !== 0) throw new HttpError(500, `MySQL: ${result.stderr.trim()}`);
   return result.stdout;

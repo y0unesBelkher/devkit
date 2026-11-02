@@ -84,6 +84,16 @@ describe('server', () => {
     expect((await call('/api/tools/updates/apply', { method: 'POST', headers: json, body: '{"target":"everything"}' })).status).toBe(422);
   });
 
+  test('workspace routes validate input', async () => {
+    const json = { ...auth, 'content-type': 'application/json' };
+    expect((await call('/api/groups', { method: 'POST', headers: json, body: '{"name":""}' })).status).toBe(422);
+    expect((await call('/api/groups/missing/start', { method: 'POST', headers: auth })).status).toBe(404);
+    expect((await call('/api/sites/missing/group', { method: 'PUT', headers: json, body: '{"groupId":null}' })).status).toBe(404);
+    expect((await call('/api/files/delete', { method: 'POST', headers: json, body: '{"path":"/etc/passwd"}' })).status).toBe(403);
+    expect((await call('/api/files/chmod', { method: 'POST', headers: json, body: '{"path":"/home/dev/x","mode":"u+s"}' })).status).toBe(422);
+    expect((await call('/api/files/explode', { method: 'POST', headers: json, body: '{"path":"/home/dev/x"}' })).status).toBe(404);
+  });
+
   test('jobs list starts empty', async () => {
     const res = await call('/api/jobs', { headers: auth });
     expect(await res.json()).toEqual({ jobs: [] });

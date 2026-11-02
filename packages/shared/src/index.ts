@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.6.0';
+export const DAEMON_VERSION = '0.7.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -382,6 +382,109 @@ export interface ToolUpdates {
   npm: Record<string, PackageUpdate[]>;
 }
 
+// ---------------------------------------------------------------------------
+// Groups: labels that hold sites (e.g. a Laravel API and its Angular front end)
+
+export interface Group {
+  id: string;
+  name: string;
+  siteIds: string[];
+}
+
+/** GET /api/groups */
+export interface GroupsResponse {
+  groups: Group[];
+}
+
+/** POST /api/groups, PATCH /api/groups/:id */
+export interface GroupRequest {
+  name: string;
+}
+
+/** PUT /api/sites/:id/group: a site belongs to at most one group. */
+export interface SetSiteGroupRequest {
+  groupId: string | null;
+}
+
+/** POST /api/groups/:id/:action (start | stop | restart every process of every site in the group). */
+export interface GroupActionResult {
+  processes: number;
+  failed: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Databases (MySQL) and Adminer
+
+/** Built-in Adminer site; EnvKit already uses adminer.test. */
+export const ADMINER_DOMAIN = 'adminer-wsl.test';
+
+export interface DatabaseInfo {
+  name: string;
+  tables: number;
+  sizeBytes: number;
+}
+
+/** GET /api/databases */
+export interface DatabasesResponse {
+  mysqlInstalled: boolean;
+  mysqlRunning: boolean;
+  databases: DatabaseInfo[];
+  adminer: { enabled: boolean; domain: string; username: string } | null;
+}
+
+/** POST /api/databases */
+export interface CreateDatabaseRequest {
+  name: string;
+}
+
+/** POST /api/databases/:name/import and /export; `file` is a Linux path (.sql or .sql.gz). */
+export interface DatabaseFileRequest {
+  file: string;
+}
+
+// ---------------------------------------------------------------------------
+// Files: browsing and editing the Linux filesystem as the project user
+
+export interface FileEntry {
+  name: string;
+  type: 'dir' | 'file' | 'link' | 'other';
+  size: number;
+  /** Milliseconds since the epoch. */
+  modified: number;
+  /** Octal permission bits, e.g. "755". */
+  mode: string;
+  owner: string;
+}
+
+/** GET /api/files?path=… (defaults to the user's home) */
+export interface ListFilesResponse {
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: FileEntry[];
+}
+
+/** GET /api/files/preview?path=… */
+export interface FilePreview {
+  path: string;
+  size: number;
+  kind: 'text' | 'image' | 'binary' | 'too-large';
+  text?: string;
+  /** data: URL for images. */
+  dataUrl?: string;
+}
+
+/** POST /api/files/:op with op in mkdir | touch | rename | delete | chmod. */
+export interface FileOpRequest {
+  path: string;
+  /** rename: destination path. */
+  to?: string;
+  /** chmod: octal mode such as "755". */
+  mode?: string;
+}
+
+export type OpenTarget = 'vscode' | 'explorer' | 'terminal';
+
 export interface CreateSiteResponse {
   site: Site;
   /** Things that happened besides the site itself (database created, user reused, …). */
@@ -474,7 +577,8 @@ export interface ActionResult {
 export type ClientMessage =
   | { type: 'logs.subscribe'; serviceId: string; sourceId: string }
   | { type: 'logs.unsubscribe' }
-  | { type: 'process-logs.subscribe'; processId: string };
+  | { type: 'process-logs.subscribe'; processId: string }
+  | { type: 'group-logs.subscribe'; groupId: string };
 
 export type DaemonEvent =
   | { type: 'services'; services: ServiceStatus[] }
@@ -482,6 +586,7 @@ export type DaemonEvent =
   | { type: 'job.output'; jobId: string; lines: string[] }
   | { type: 'processes'; processes: SiteProcess[] }
   | { type: 'process-log'; processId: string; lines: string[] }
+  | { type: 'group-log'; groupId: string; lines: string[] }
   | { type: 'log'; serviceId: string; sourceId: string; lines: string[] }
   /** Emitted by the Electron main process when the socket to the daemon opens or drops. */
   | { type: 'socket'; connected: boolean };
@@ -502,4 +607,8 @@ export interface DevkitBridge {
   /** Rewrites the DevKit block of the hosts file from the daemon's sites (one UAC prompt when it changes). */
   syncHosts(): Promise<ActionResult>;
   setListenMode(mode: ListenMode): Promise<ActionResult>;
+  /** Opens a Linux path in VS Code (WSL remote), Windows Explorer or Windows Terminal. */
+  openPath(target: OpenTarget, path: string): Promise<ActionResult>;
+  /** Windows file dialog; returns the chosen file as a Linux path (/mnt/c/…), or null when cancelled. */
+  pickFile(mode: 'open' | 'save', defaultName?: string): Promise<string | null>;
 }

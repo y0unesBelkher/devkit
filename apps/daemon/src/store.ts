@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path/posix';
-import type { ProcessKind, Site, SiteType } from '@devkit/shared';
+import type { Group, ProcessKind, Site, SiteType } from '@devkit/shared';
 
 interface SiteRow {
   id: string;
@@ -63,6 +63,10 @@ const MIGRATIONS: string[][] = [
        autostart INTEGER NOT NULL,
        created_at INTEGER NOT NULL
      )`,
+  ],
+  [
+    `CREATE TABLE site_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL)`,
+    `ALTER TABLE sites ADD COLUMN group_id TEXT`,
   ],
 ];
 
@@ -172,6 +176,42 @@ export class Store {
 
   deleteProcess(id: string): void {
     this.db.query('DELETE FROM processes WHERE id = ?').run(id);
+  }
+
+  listGroups(): Group[] {
+    const groups = this.db.query<{ id: string; name: string }, []>('SELECT id, name FROM site_groups ORDER BY name COLLATE NOCASE').all();
+    const members = this.db
+      .query<{ id: string; group_id: string }, []>('SELECT id, group_id FROM sites WHERE group_id IS NOT NULL ORDER BY domain')
+      .all();
+    return groups.map((g) => ({ ...g, siteIds: members.filter((m) => m.group_id === g.id).map((m) => m.id) }));
+  }
+
+  getGroup(id: string): Group | null {
+    return this.listGroups().find((g) => g.id === id) ?? null;
+  }
+
+  findGroupByName(name: string): Group | null {
+    return this.listGroups().find((g) => g.name.toLowerCase() === name.toLowerCase()) ?? null;
+  }
+
+  insertGroup(id: string, name: string): void {
+    this.db.query('INSERT INTO site_groups (id, name, created_at) VALUES (?, ?, ?)').run(id, name, Date.now());
+  }
+
+  renameGroup(id: string, name: string): void {
+    this.db.query('UPDATE site_groups SET name = ? WHERE id = ?').run(name, id);
+  }
+
+  /** Deleting a group leaves its sites in place, ungrouped. */
+  deleteGroup(id: string): void {
+    this.db.transaction(() => {
+      this.db.query('UPDATE sites SET group_id = NULL WHERE group_id = ?').run(id);
+      this.db.query('DELETE FROM site_groups WHERE id = ?').run(id);
+    })();
+  }
+
+  setSiteGroup(siteId: string, groupId: string | null): void {
+    this.db.query('UPDATE sites SET group_id = ? WHERE id = ?').run(groupId, siteId);
   }
 
   close(): void {

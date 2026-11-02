@@ -17,6 +17,8 @@ const bridge: DevkitBridge = {
   trustCa: () => ipcRenderer.invoke('devkit:trust-ca'),
   syncHosts: () => ipcRenderer.invoke('devkit:sync-hosts'),
   setListenMode: (mode) => ipcRenderer.invoke('devkit:set-listen-mode', mode),
+  openPath: (target, path) => ipcRenderer.invoke('devkit:open-path', target, path),
+  pickFile: (mode, defaultName) => ipcRenderer.invoke('devkit:pick-file', mode, defaultName),
 };
 
 contextBridge.exposeInMainWorld('devkit', bridge);

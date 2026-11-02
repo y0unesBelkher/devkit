@@ -21,6 +21,7 @@ import {
   type WindowsStatus,
 } from '@devkit/shared';
 import { ConsoleView } from '../components/console-view';
+import { FolderPicker } from '../components/folder-picker';
 import { Daemon } from '../core/daemon';
 
 const MAX_LOG_LINES = 2000;
@@ -29,7 +30,7 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
 
 @Component({
   selector: 'app-sites',
-  imports: [FormsModule, ConsoleView],
+  imports: [FormsModule, ConsoleView, FolderPicker],
   template: `
     <div class="mx-auto max-w-5xl p-8">
       <div class="flex items-center justify-between">
@@ -114,12 +115,16 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
             Project folder (inside WSL)
             <input class="input mt-1 font-mono" name="root" [(ngModel)]="root" placeholder="/home/you/projects/lv-oms" autocomplete="off" />
           </label>
-          <div class="flex items-end">
+          <div class="flex items-end gap-2">
+            <button class="btn h-9 px-4" type="button" (click)="picking.set(true)">Browse…</button>
             <button class="btn h-9 px-4" type="submit" [disabled]="busy() !== null || !root.trim()">
               {{ busy() === 'detect' ? 'Detecting…' : 'Detect' }}
             </button>
           </div>
         </form>
+        @if (picking()) {
+          <app-folder-picker [start]="root.trim() || undefined" (chosen)="pickedRoot($event)" (cancelled)="picking.set(false)" />
+        }
 
         @if (detected(); as d) {
           <form class="mt-4 border-t border-zinc-800 pt-4" (ngSubmit)="create()">
@@ -324,6 +329,7 @@ export class Sites implements OnInit {
   protected readonly phpVersions = signal<string[]>([]);
   protected readonly processes = signal<SiteProcess[]>([]);
   protected readonly logProcess = signal<string | null>(null);
+  protected readonly picking = signal(false);
   protected readonly logLines = signal<string[]>([]);
   protected readonly typeLabels: Record<SiteType, string> = {
     laravel: 'Laravel',
@@ -366,6 +372,12 @@ export class Sites implements OnInit {
     await this.run('load', async () => {
       await Promise.all([this.loadSites(), this.loadStatus(), this.loadPhpVersions(), this.loadProcesses()]);
     });
+  }
+
+  protected pickedRoot(path: string): void {
+    this.picking.set(false);
+    this.root = path;
+    void this.detect();
   }
 
   protected canCreate(): boolean {
