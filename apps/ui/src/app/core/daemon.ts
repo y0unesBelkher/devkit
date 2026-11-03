@@ -74,10 +74,7 @@ export class Daemon {
   }
 
   /** Windows-side actions; only callable inside the desktop app (pages check `inDesktopApp`). */
-  get windows(): Pick<
-    DevkitBridge,
-    'windowsStatus' | 'trustCa' | 'syncHosts' | 'setListenMode' | 'openPath' | 'pickFile' | 'dumpEnvKitDatabase'
-  > {
+  get windows(): DevkitBridge {
     if (!this.bridge) throw new Error('Not running inside the DevKit desktop app');
     return this.bridge;
   }

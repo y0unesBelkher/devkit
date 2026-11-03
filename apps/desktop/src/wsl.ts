@@ -34,6 +34,11 @@ export async function listDistros(): Promise<string[]> {
     .filter(Boolean);
 }
 
+/** UNC path Windows uses for a file inside the distro: /home/u/app → \\wsl.localhost\Ubuntu\home\u\app */
+export function toWslUnc(linuxPath: string): string {
+  return `\\\\wsl.localhost\\${DISTRO}${linuxPath.replace(/\//g, '\\')}`;
+}
+
 /** Quotes a value for a POSIX shell. */
 export function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;

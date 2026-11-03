@@ -20,6 +20,9 @@ const bridge: DevkitBridge = {
   openPath: (target, path) => ipcRenderer.invoke('devkit:open-path', target, path),
   pickFile: (mode, defaultName) => ipcRenderer.invoke('devkit:pick-file', mode, defaultName),
   dumpEnvKitDatabase: (database) => ipcRenderer.invoke('devkit:envkit-dump', database),
+  getSettings: () => ipcRenderer.invoke('devkit:get-settings'),
+  saveSettings: (changes) => ipcRenderer.invoke('devkit:save-settings', changes),
+  listEditors: () => ipcRenderer.invoke('devkit:list-editors'),
 };
 
 contextBridge.exposeInMainWorld('devkit', bridge);

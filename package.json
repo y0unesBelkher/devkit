@@ -13,6 +13,7 @@
     "build": "npm run build:daemon && npm run build:ui && npm run build:desktop",
     "dev": "npm run build:daemon && concurrently -k -n ui,desktop -c cyan,magenta \"npm -w @devkit/ui start\" \"wait-on http://localhost:4200 && npm -w @devkit/desktop run dev\"",
     "test": "npm -w @devkit/daemon test",
+    "package": "npm run build:daemon && npm run build:ui && npm -w @devkit/desktop run dist",
     "typecheck": "npm -w @devkit/daemon run typecheck && npm -w @devkit/desktop run typecheck"
   },
   "devDependencies": {

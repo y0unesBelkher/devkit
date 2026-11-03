@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.8.0';
+export const DAEMON_VERSION = '0.9.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -237,6 +237,8 @@ export interface DetectResult {
   /** Best installed version matching the constraint (or the newest installed). */
   phpVersion: string | null;
   installedPhpVersions: string[];
+  /** Newest PHP DevKit offers that satisfies the constraint, installed or not (what to install). */
+  phpSuggested: string | null;
   /** From .nvmrc or package.json engines.node, e.g. "^20.19.0 || ^22.12.0". */
   nodeRequirement: string | null;
   /** Best installed Node version for the requirement (or the newest installed). */
@@ -483,7 +485,29 @@ export interface FileOpRequest {
   mode?: string;
 }
 
-export type OpenTarget = 'vscode' | 'explorer' | 'terminal';
+/** `editor` is whichever editor is chosen in Settings (Antigravity, VS Code, …). */
+export type OpenTarget = 'editor' | 'explorer' | 'terminal';
+
+// ---------------------------------------------------------------------------
+// Desktop app settings (stored on the Windows side by the Electron app)
+
+export type EditorId = 'antigravity' | 'vscode' | 'cursor' | 'windsurf' | 'custom';
+
+export interface EditorInfo {
+  id: EditorId;
+  name: string;
+  /** Detected launcher (…\bin\code.cmd), or null when not installed. */
+  command: string | null;
+}
+
+export interface DesktopSettings {
+  editor: EditorId;
+  /** For `custom`: a Windows command line; {path} is the Linux path, {unc} the \\wsl.localhost path. */
+  customEditorCommand: string;
+  startWithWindows: boolean;
+  /** Closing the window keeps DevKit running in the tray. */
+  closeToTray: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Migration from EnvKit / any Windows folder into WSL
@@ -546,6 +570,68 @@ export interface DumpResult {
   message: string;
   /** Linux path of the dump, for MigrateRequest.databaseDump. */
   file?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Site details: logs, .env, artisan, insights
+
+export interface SiteLogSource {
+  id: string;
+  label: string;
+}
+
+/** GET /api/sites/:id/logs/sources */
+export interface SiteLogSourcesResponse {
+  sources: SiteLogSource[];
+}
+
+/** GET/PUT /api/sites/:id/env */
+export interface SiteEnv {
+  path: string;
+  exists: boolean;
+  content: string;
+  /** A .env.example is there to start from. */
+  exampleExists: boolean;
+}
+
+/** POST /api/sites/:id/artisan: runs `php artisan <command>` as the project user (as a job). */
+export interface ArtisanRequest {
+  command: string;
+}
+
+export interface ProcessUsage {
+  id: string;
+  name: string;
+  active: ActiveState;
+  memoryBytes: number | null;
+  /** Average over the time since the previous sample; null on the first one. */
+  cpuPercent: number | null;
+}
+
+export interface SiteInsights {
+  siteId: string;
+  processes: ProcessUsage[];
+  memoryBytes: number;
+  cpuPercent: number | null;
+  /** The shared PHP-FPM pool the site runs on (all sites on that version share it). */
+  fpm: { version: string; memoryBytes: number | null } | null;
+  requests: { lastHour: number; last24h: number; errors24h: number };
+  /** Size of the project folder; measured in the background and cached. */
+  disk: { bytes: number; measuredAt: number } | null;
+}
+
+/** GET /api/insights */
+export interface InsightsResponse {
+  sites: SiteInsights[];
+}
+
+/** GET /api/system/resources: the WSL VM as a whole. */
+export interface SystemResources {
+  memory: { totalBytes: number; availableBytes: number };
+  cpus: number;
+  load: [number, number, number];
+  disk: { totalBytes: number; freeBytes: number };
+  uptimeSec: number;
 }
 
 export interface CreateSiteResponse {
@@ -706,7 +792,8 @@ export type ClientMessage =
   | { type: 'logs.subscribe'; serviceId: string; sourceId: string }
   | { type: 'logs.unsubscribe' }
   | { type: 'process-logs.subscribe'; processId: string }
-  | { type: 'group-logs.subscribe'; groupId: string };
+  | { type: 'group-logs.subscribe'; groupId: string }
+  | { type: 'site-logs.subscribe'; siteId: string; sourceId: string };
 
 export type DaemonEvent =
   | { type: 'services'; services: ServiceStatus[] }
@@ -715,6 +802,7 @@ export type DaemonEvent =
   | { type: 'processes'; processes: SiteProcess[] }
   | { type: 'process-log'; processId: string; lines: string[] }
   | { type: 'group-log'; groupId: string; lines: string[] }
+  | { type: 'site-log'; siteId: string; sourceId: string; lines: string[] }
   | { type: 'log'; serviceId: string; sourceId: string; lines: string[] }
   /** Emitted by the Electron main process when the socket to the daemon opens or drops. */
   | { type: 'socket'; connected: boolean };
@@ -741,4 +829,7 @@ export interface DevkitBridge {
   pickFile(mode: 'open' | 'save', defaultName?: string): Promise<string | null>;
   /** Dumps a database from EnvKit's MySQL with its own mysqldump.exe (read-only on EnvKit's side). */
   dumpEnvKitDatabase(database: string): Promise<DumpResult>;
+  getSettings(): Promise<DesktopSettings>;
+  saveSettings(changes: Partial<DesktopSettings>): Promise<DesktopSettings>;
+  listEditors(): Promise<EditorInfo[]>;
 }

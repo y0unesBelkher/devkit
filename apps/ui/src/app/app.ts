@@ -1,12 +1,13 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { DialogHost } from './components/dialogs';
 import { NetworkBanner } from './components/network-banner';
 import { Daemon } from './core/daemon';
 import { NAV } from './app.routes';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, NetworkBanner],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, NetworkBanner, DialogHost],
   host: { class: 'flex h-screen bg-zinc-950 text-zinc-100' },
   template: `
     <aside class="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60">
@@ -39,6 +40,7 @@ import { NAV } from './app.routes';
         <router-outlet />
       </div>
     </main>
+    <app-dialogs />
   `,
 })
 export class App implements OnInit {

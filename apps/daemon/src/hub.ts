@@ -6,6 +6,7 @@ import { logCommand } from './services/logs.ts';
 import { listServices } from './services/services.ts';
 import { formatJournalJson, groupUnits } from './sites/groups.ts';
 import { listProcesses, unitName } from './sites/processes.ts';
+import { siteLogCommand } from './sites/site-logs.ts';
 import type { Store } from './store.ts';
 
 export interface SocketData {
@@ -83,6 +84,16 @@ export class Hub {
     else if (message.type === 'logs.subscribe') this.startServiceLogs(ws, message.serviceId, message.sourceId);
     else if (message.type === 'process-logs.subscribe') this.startProcessLogs(ws, message.processId);
     else if (message.type === 'group-logs.subscribe') this.startGroupLogs(ws, message.groupId);
+    else if (message.type === 'site-logs.subscribe') this.startSiteLogs(ws, message.siteId, message.sourceId);
+  }
+
+  private startSiteLogs(ws: Socket, siteId: string, sourceId: string): void {
+    const send = (lines: string[]) => ws.send(JSON.stringify({ type: 'site-log', siteId, sourceId, lines } satisfies DaemonEvent));
+    this.stream(ws, send, () => {
+      const site = this.store.getSite(siteId);
+      if (!site) throw new Error('Unknown site');
+      return siteLogCommand(site, this.store.listProcesses(siteId), sourceId, INITIAL_LOG_LINES);
+    });
   }
 
   /** Every process of every site in the group, interleaved and labelled. */

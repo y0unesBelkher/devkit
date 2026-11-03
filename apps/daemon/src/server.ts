@@ -6,6 +6,7 @@ import {
   PROCESS_ACTIONS,
   SERVICE_ACTIONS,
   type ApiError,
+  type ArtisanRequest,
   type CreateDatabaseRequest,
   type CreateProcessRequest,
   type CreateSiteRequest,
@@ -17,6 +18,7 @@ import {
   type FileOpRequest,
   type GroupRequest,
   type GroupsResponse,
+  type InsightsResponse,
   type InstallNodeRequest,
   type MigrateRequest,
   type NodeGlobalRequest,
@@ -26,6 +28,8 @@ import {
   type ProcessesResponse,
   type SetNetworkRequest,
   type SetSiteGroupRequest,
+  type Site,
+  type SiteLogSourcesResponse,
   type SitesResponse,
   type ToolsInfo,
   type UpdateProcessRequest,
@@ -64,6 +68,10 @@ import {
   prepareDump,
 } from './databases/databases.ts';
 import { fileOperation, listFiles, previewFile } from './files/files.ts';
+import { installRecommendedStack, systemResources } from './setup.ts';
+import { envFromExample, readSiteEnv, runArtisan, validateArtisan, writeSiteEnv } from './sites/env-file.ts';
+import { siteInsights } from './sites/insights.ts';
+import { siteLogSources } from './sites/site-logs.ts';
 import { readEnvKit } from './migrate/envkit.ts';
 import { migrateProject, validateMigration } from './migrate/migrate.ts';
 import { detectProject, installedPhpVersions } from './sites/detect.ts';
@@ -118,6 +126,12 @@ interface Route {
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
+
+function requireSite(store: Store, id: string): Site {
+  const site = store.getSite(id);
+  if (!site) throw new HttpError(404, 'Unknown site');
+  return site;
+}
 
 async function readJson<T>(request: Request): Promise<T> {
   try {
@@ -489,6 +503,63 @@ const routes: Route[] = [
       await disableAdminer(ctx.store);
       return new Response(null, { status: 204 });
     },
+  },
+  // Site details
+  {
+    method: 'GET',
+    path: '/api/sites/:id/logs/sources',
+    handler: ({ params, ctx }) => {
+      const site = requireSite(ctx.store, params['id'] ?? '');
+      return json({ sources: siteLogSources(site, ctx.store.listProcesses(site.id)) } satisfies SiteLogSourcesResponse);
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/sites/:id/env',
+    handler: ({ params, ctx }) => json(readSiteEnv(requireSite(ctx.store, params['id'] ?? ''))),
+  },
+  {
+    method: 'PUT',
+    path: '/api/sites/:id/env',
+    handler: async ({ request, params, ctx }) => {
+      const site = requireSite(ctx.store, params['id'] ?? '');
+      const body = await readJson<{ content: string }>(request);
+      return json(await writeSiteEnv(site, ctx.config.user, body.content));
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/sites/:id/env/example',
+    handler: async ({ params, ctx }) => json(await envFromExample(requireSite(ctx.store, params['id'] ?? ''), ctx.config.user)),
+  },
+  {
+    method: 'POST',
+    path: '/api/sites/:id/artisan',
+    handler: async ({ request, params, ctx }) => {
+      const site = requireSite(ctx.store, params['id'] ?? '');
+      if (site.type !== 'laravel') throw new HttpError(422, 'Not a Laravel site');
+      const args = validateArtisan((await readJson<ArtisanRequest>(request)).command);
+      return json(ctx.jobs.enqueue(`php artisan ${args.join(' ')} (${site.domain})`, (job) => runArtisan(job, site, ctx.config.user, args)), 202);
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/insights',
+    handler: async ({ ctx }) => json({ sites: await siteInsights(ctx.store, ctx.config.user) } satisfies InsightsResponse),
+  },
+  {
+    method: 'GET',
+    path: '/api/system/resources',
+    handler: async () => json(await systemResources()),
+  },
+  {
+    method: 'POST',
+    path: '/api/setup/recommended',
+    handler: ({ ctx }) =>
+      json(
+        ctx.jobs.enqueue('Install the recommended stack', (job) => installRecommendedStack(job, ctx.config.user), () => void ctx.hub.refresh()),
+        202,
+      ),
   },
   // Migration from EnvKit / Windows folders
   {

@@ -113,6 +113,7 @@ export async function detectProject(requestedRoot: string, user: string): Promis
     phpConstraint: constraint,
     phpVersion,
     installedPhpVersions: phpInstalled,
+    phpSuggested: usesPhp ? pickPhpVersion(constraint, PHP_VERSIONS) : null,
     nodeRequirement: nodeWanted,
     nodeVersion,
     installedNodeVersions: nodeInstalled,

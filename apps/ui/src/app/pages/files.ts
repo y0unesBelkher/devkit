@@ -1,6 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { FileEntry, FilePreview, ListFilesResponse, OpenTarget } from '@devkit/shared';
+import { Dialogs } from '../components/dialogs';
 import { Daemon } from '../core/daemon';
 import { FilesApi, formatSize, joinPath } from '../core/files-api';
 
@@ -25,7 +26,7 @@ import { FilesApi, formatSize, joinPath } from '../core/files-api';
       <button class="dk-btn" [disabled]="!selectedEntry()" (click)="chmod(selectedEntry()!)">Chmod</button>
       <button class="dk-btn dk-btn-danger" [disabled]="!selectedEntry()" (click)="remove(selectedEntry()!)">Delete</button>
       <span class="mx-1 h-5 w-px bg-zinc-800"></span>
-      <button class="dk-btn" (click)="open('vscode', selectedPath())">VS Code</button>
+      <button class="dk-btn" (click)="open('editor', selectedPath())">Open in editor</button>
       <button class="dk-btn" (click)="open('explorer', listing()?.path)">Explorer</button>
       <button class="dk-btn" (click)="open('terminal', listing()?.path)">Terminal</button>
     </div>
@@ -78,7 +79,7 @@ import { FilesApi, formatSize, joinPath } from '../core/files-api';
           <header class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2 text-sm">
             <span class="min-w-0 flex-1 truncate font-mono text-xs" [title]="p.path">{{ p.path }}</span>
             <span class="text-xs text-zinc-500">{{ size(p.size) }}</span>
-            <button class="text-xs text-zinc-400 hover:text-white" (click)="open('vscode', p.path)">Edit in VS Code</button>
+            <button class="text-xs text-zinc-400 hover:text-white" (click)="open('editor', p.path)">Edit</button>
             <button class="text-xs text-zinc-400 hover:text-white" (click)="preview.set(null)">✕</button>
           </header>
           <div class="min-h-0 flex-1 overflow-auto">
@@ -105,6 +106,7 @@ import { FilesApi, formatSize, joinPath } from '../core/files-api';
 export class Files implements OnInit {
   private readonly daemon = inject(Daemon);
   private readonly files = inject(FilesApi);
+  private readonly dialogs = inject(Dialogs);
 
   protected readonly listing = signal<ListFilesResponse | null>(null);
   protected readonly selected = signal<string | null>(null);
@@ -175,24 +177,28 @@ export class Files implements OnInit {
   protected activate(entry: FileEntry): void {
     const path = joinPath(this.listing()!.path, entry.name);
     if (entry.type === 'dir' || entry.type === 'link') void this.go(path);
-    else void this.open('vscode', path);
+    else void this.open('editor', path);
   }
 
   protected async create(op: 'mkdir' | 'touch'): Promise<void> {
-    const name = prompt(op === 'mkdir' ? 'New folder name' : 'New file name')?.trim();
+    const name = await this.dialogs.prompt(op === 'mkdir' ? 'New folder' : 'New file', { placeholder: 'name', confirmLabel: 'Create' });
     if (!name || !this.listing()) return;
     await this.mutate(op, { path: joinPath(this.listing()!.path, name) }, `Created ${name}.`);
   }
 
   protected async rename(entry: FileEntry): Promise<void> {
-    const name = prompt('Rename to', entry.name)?.trim();
+    const name = await this.dialogs.prompt(`Rename ${entry.name}`, { value: entry.name, confirmLabel: 'Rename' });
     if (!name || name === entry.name) return;
     const dir = this.listing()!.path;
     await this.mutate('rename', { path: joinPath(dir, entry.name), to: joinPath(dir, name) }, `Renamed to ${name}.`);
   }
 
   protected async chmod(entry: FileEntry): Promise<void> {
-    const mode = prompt(`Permissions for ${entry.name} (octal)`, entry.mode)?.trim();
+    const mode = await this.dialogs.prompt(`Permissions for ${entry.name}`, {
+      value: entry.mode,
+      message: 'Octal mode, e.g. 644 for files or 755 for folders and scripts.',
+      confirmLabel: 'Apply',
+    });
     if (!mode || mode === entry.mode) return;
     await this.mutate('chmod', { path: joinPath(this.listing()!.path, entry.name), mode }, `${entry.name} is now ${mode}.`);
   }

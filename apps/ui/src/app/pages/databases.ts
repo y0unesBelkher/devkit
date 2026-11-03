@@ -2,6 +2,7 @@ import { Component, OnInit, computed, effect, inject, signal, untracked } from '
 import { FormsModule } from '@angular/forms';
 import type { DatabaseInfo, DatabasesResponse } from '@devkit/shared';
 import { ConsoleView } from '../components/console-view';
+import { Dialogs } from '../components/dialogs';
 import { Daemon } from '../core/daemon';
 import { ServicesStore } from '../core/services-store';
 
@@ -91,6 +92,7 @@ import { ServicesStore } from '../core/services-store';
 export class Databases implements OnInit {
   private readonly daemon = inject(Daemon);
   private readonly store = inject(ServicesStore);
+  private readonly dialogs = inject(Dialogs);
 
   protected readonly state = signal<DatabasesResponse | null>(null);
   protected readonly notice = signal<{ ok: boolean; message: string } | null>(null);
@@ -134,7 +136,11 @@ export class Databases implements OnInit {
   }
 
   protected async drop(db: DatabaseInfo): Promise<void> {
-    const typed = prompt(`This permanently deletes ${db.name} and its ${db.tables} tables.\nType the database name to confirm:`);
+    const typed = await this.dialogs.prompt(`Drop ${db.name}?`, {
+      message: `This permanently deletes ${db.name} and its ${db.tables} tables. Type the database name to confirm.`,
+      placeholder: db.name,
+      confirmLabel: 'Drop database',
+    });
     if (typed !== db.name) return;
     const result = await this.daemon.api({ method: 'DELETE', path: `/api/databases/${encodeURIComponent(db.name)}` });
     this.notice.set(result.ok ? { ok: true, message: `Dropped ${db.name}.` } : { ok: false, message: result.error });

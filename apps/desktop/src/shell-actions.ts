@@ -1,12 +1,9 @@
 import { spawn } from 'node:child_process';
 import { BrowserWindow, dialog } from 'electron';
 import type { ActionResult, OpenTarget } from '@devkit/shared';
-import { DISTRO, wsl } from './wsl';
-
-/** UNC path Windows uses for a file inside the distro: /home/u/app → \\wsl.localhost\Ubuntu\home\u\app */
-export function toWslUnc(linuxPath: string): string {
-  return `\\\\wsl.localhost\\${DISTRO}${linuxPath.replace(/\//g, '\\')}`;
-}
+import { openInEditor } from './editors';
+import { getSettings } from './settings';
+import { DISTRO, toWslUnc, wsl } from './wsl';
 
 /** Starts a Windows program without waiting for it or tying its lifetime to DevKit. */
 function launch(file: string, args: string[]): Promise<void> {
@@ -23,11 +20,7 @@ function launch(file: string, args: string[]): Promise<void> {
 export async function openPath(target: OpenTarget, linuxPath: string): Promise<ActionResult> {
   if (!/^\/[^\0]*$/.test(linuxPath)) return { ok: false, message: 'Expected an absolute Linux path.' };
   try {
-    if (target === 'vscode') {
-      // VS Code's Remote - WSL opens the folder inside the distro, so extensions and terminals run in Linux.
-      await launch('cmd.exe', ['/d', '/c', 'code', '--remote', `wsl+${DISTRO}`, linuxPath]);
-      return { ok: true, message: `Opening ${linuxPath} in VS Code.` };
-    }
+    if (target === 'editor') return await openInEditor(getSettings(), linuxPath);
     if (target === 'explorer') {
       await launch('explorer.exe', [toWslUnc(linuxPath)]);
       return { ok: true, message: `Opening ${linuxPath} in Explorer.` };
