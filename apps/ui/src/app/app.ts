@@ -12,7 +12,7 @@ import { NAV } from './app.routes';
   template: `
     <aside class="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60">
       <div class="flex items-center gap-2 px-5 py-5">
-        <div class="grid size-8 place-items-center rounded-lg bg-emerald-500 font-bold text-zinc-950">D</div>
+        <img src="icon.png" alt="" class="size-9" />
         <div>
           <div class="font-semibold leading-tight">DevKit</div>
           <div class="text-xs text-zinc-500">WSL dev environment</div>

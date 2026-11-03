@@ -37,11 +37,24 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "../daemon/dist/devkitd", "to": "devkitd" },
-      { "from": "../ui/dist/ui/browser", "to": "ui" }
+      {
+        "from": "../daemon/dist/devkitd",
+        "to": "devkitd"
+      },
+      {
+        "from": "../ui/dist/ui/browser",
+        "to": "ui"
+      }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico",
       "executableName": "DevKit"
     },
@@ -55,6 +68,10 @@
       "deleteAppDataOnUninstall": false,
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
+    },
+    "electronVersion": "45.2.1",
+    "extraMetadata": {
+      "name": "devkit"
     }
   }
 }
