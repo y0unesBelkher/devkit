@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.7.0';
+export const DAEMON_VERSION = '0.8.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -485,6 +485,69 @@ export interface FileOpRequest {
 
 export type OpenTarget = 'vscode' | 'explorer' | 'terminal';
 
+// ---------------------------------------------------------------------------
+// Migration from EnvKit / any Windows folder into WSL
+
+export interface EnvKitQueueWorker {
+  queue: string;
+  tries: number;
+  timeout: number;
+  sleep: number;
+  enabled: boolean;
+}
+
+export interface EnvKitSite {
+  name: string;
+  domain: string;
+  windowsRoot: string;
+  /** The same folder as WSL sees it (/mnt/c/…). */
+  source: string;
+  sourceExists: boolean;
+  type: SiteType;
+  group: string | null;
+  queueWorkers: EnvKitQueueWorker[];
+  devServer: { port: number; script: string } | null;
+  /** DB_DATABASE from the project's .env when it uses MySQL. */
+  database: string | null;
+  /** Where DevKit suggests putting it, e.g. /home/you/projects/zoon/lv-oms. */
+  suggestedTarget: string;
+  /** The DevKit site with this domain, if it was already migrated. */
+  migrated: { siteId: string; root: string } | null;
+}
+
+/** GET /api/migrate/envkit */
+export interface EnvKitImport {
+  found: boolean;
+  sitesFile: string;
+  sites: EnvKitSite[];
+}
+
+/** POST /api/migrate: copy a Windows project into WSL and set it up as a DevKit site. */
+export interface MigrateRequest {
+  /** /mnt/<drive>/… path of the Windows project. */
+  source: string;
+  /** Linux destination inside your home; must not exist yet. */
+  target: string;
+  domain: string;
+  type: SiteType;
+  phpVersion?: string | null;
+  nodeVersion?: string | null;
+  /** Re-run composer install instead of copying vendor/ (node_modules is never copied). */
+  reinstallVendor: boolean;
+  /** Dump produced on Windows (Linux path) to import into the .env database. */
+  databaseDump?: string | null;
+  queueWorkers?: EnvKitQueueWorker[];
+  group?: string | null;
+}
+
+/** Result of dumping a database from EnvKit's MySQL on the Windows side. */
+export interface DumpResult {
+  ok: boolean;
+  message: string;
+  /** Linux path of the dump, for MigrateRequest.databaseDump. */
+  file?: string;
+}
+
 export interface CreateSiteResponse {
   site: Site;
   /** Things that happened besides the site itself (database created, user reused, …). */
@@ -523,21 +586,45 @@ export interface HostsEntry {
   domain: string;
 }
 
-/** Replaces (or appends) the DevKit block in a hosts file, keeping everything else and its line endings. */
-export function applyHostsBlock(content: string, entries: HostsEntry[]): string {
-  const eol = content.includes('\r\n') ? '\r\n' : '\n';
-  const lines = content.split(/\r?\n/);
+const isEntry = (line: string) => line.trim() !== '' && !line.trim().startsWith('#');
+
+/** Removes the DevKit block (and the blank line that separated it), leaving everything else untouched. */
+function withoutHostsBlock(lines: string[]): string[] {
   const begin = lines.indexOf(HOSTS_BEGIN);
   const end = begin === -1 ? -1 : lines.indexOf(HOSTS_END, begin);
-  const outside = begin === -1 || end === -1 ? lines : [...lines.slice(0, begin), ...lines.slice(end + 1)];
-  while (outside.length && outside[outside.length - 1] === '') outside.pop();
-  const block = entries.length
-    ? ['', HOSTS_BEGIN, ...[...entries].sort((a, b) => a.domain.localeCompare(b.domain)).map((e) => `${e.ip} ${e.domain}`), HOSTS_END]
-    : [];
-  return [...outside, ...block, ''].join(eol);
+  if (begin === -1 || end === -1) return lines;
+  const after = lines[end + 1] === '' ? end + 2 : end + 1;
+  return [...lines.slice(0, begin), ...lines.slice(after)];
 }
 
-/** Domains that already resolve through a line outside the DevKit block (e.g. EnvKit's), which would shadow ours. */
+/**
+ * Writes the DevKit block in front of the first block of entries (keeping that block's header comment
+ * with it). Windows uses the first matching line, so a migrated site resolves to DevKit even while an
+ * older line for the same name (EnvKit, Herd) is still further down. Line endings are preserved.
+ */
+export function applyHostsBlock(content: string, entries: HostsEntry[]): string {
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = withoutHostsBlock(content.split(/\r?\n/));
+  if (entries.length === 0) return lines.join(eol);
+
+  let at = lines.findIndex(isEntry);
+  if (at === -1) {
+    at = lines.length;
+    while (at > 0 && lines[at - 1] === '') at--;
+  } else {
+    while (at > 0 && lines[at - 1]!.trim().startsWith('#')) at--;
+  }
+  const sorted = [...entries].sort((a, b) => a.domain.localeCompare(b.domain)).map((e) => `${e.ip} ${e.domain}`);
+  const needsGap = at > 0 && lines[at - 1] !== '';
+  const block = [...(needsGap ? [''] : []), HOSTS_BEGIN, ...sorted, HOSTS_END, ''];
+  const result = [...lines.slice(0, at), ...block, ...lines.slice(at)];
+  // Exactly one trailing newline.
+  while (result.length > 1 && result[result.length - 1] === '' && result[result.length - 2] === '') result.pop();
+  if (result[result.length - 1] !== '') result.push('');
+  return result.join(eol);
+}
+
+/** Domains also listed outside the DevKit block (EnvKit, Herd); DevKit's block comes first, so its entries win. */
 export function hostsConflicts(content: string, domains: string[]): string[] {
   const lines = content.split(/\r?\n/);
   const begin = lines.indexOf(HOSTS_BEGIN);
@@ -561,9 +648,11 @@ export interface WindowsStatus {
   ca: { thumbprint: string; trusted: boolean } | null;
   hosts: {
     inSync: boolean;
-    /** Domains defined outside the DevKit block, which win over ours. */
+    /** Domains also listed by another tool further down; DevKit's earlier line wins. */
     conflicts: string[];
   };
+  /** Whether Windows can open a TCP connection to nginx at the hosts target (443). */
+  reachable: boolean | null;
 }
 
 export interface ActionResult {
@@ -611,4 +700,6 @@ export interface DevkitBridge {
   openPath(target: OpenTarget, path: string): Promise<ActionResult>;
   /** Windows file dialog; returns the chosen file as a Linux path (/mnt/c/…), or null when cancelled. */
   pickFile(mode: 'open' | 'save', defaultName?: string): Promise<string | null>;
+  /** Dumps a database from EnvKit's MySQL with its own mysqldump.exe (read-only on EnvKit's side). */
+  dumpEnvKitDatabase(database: string): Promise<DumpResult>;
 }

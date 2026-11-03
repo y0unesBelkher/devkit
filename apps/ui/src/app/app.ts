@@ -1,11 +1,12 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { NetworkBanner } from './components/network-banner';
 import { Daemon } from './core/daemon';
 import { NAV } from './app.routes';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, NetworkBanner],
   host: { class: 'flex h-screen bg-zinc-950 text-zinc-100' },
   template: `
     <aside class="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60">
@@ -32,8 +33,11 @@ import { NAV } from './app.routes';
         {{ daemon.connected() ? 'Daemon connected' : 'Daemon offline' }}
       </div>
     </aside>
-    <main class="flex-1 overflow-y-auto">
-      <router-outlet />
+    <main class="flex min-w-0 flex-1 flex-col">
+      <app-network-banner />
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <router-outlet />
+      </div>
     </main>
   `,
 })

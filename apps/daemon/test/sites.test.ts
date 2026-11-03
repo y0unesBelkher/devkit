@@ -27,31 +27,73 @@ describe('validateDomain', () => {
 });
 
 describe('hosts block', () => {
-  const windowsHosts = '# Copyright\r\n127.0.0.1 lv-oms.test\r\n127.0.0.1 lv-oms.test\r\n';
+  // Shaped like the real file: Microsoft header, then Herd and EnvKit blocks.
+  const windowsHosts = [
+    '# Copyright (c) Microsoft Corp.',
+    '#',
+    '#\t::1             localhost',
+    '',
+    '# Herd generated Hosts. Do not change.',
+    '127.0.0.1 lv-oms.test',
+    '# End Herd generated Hosts',
+    '',
+    '# BEGIN envkit',
+    '127.0.0.1 lv-oms.test',
+    '# END envkit',
+    '',
+  ].join('\r\n');
 
-  test('appends a block and keeps CRLF and other lines', () => {
-    const out = applyHostsBlock(windowsHosts, [{ ip: '172.29.1.2', domain: 'hello.test' }]);
-    expect(out).toBe(`# Copyright\r\n127.0.0.1 lv-oms.test\r\n127.0.0.1 lv-oms.test\r\n\r\n${HOSTS_BEGIN}\r\n172.29.1.2 hello.test\r\n${HOSTS_END}\r\n`);
+  test('goes before the first block of entries, keeps that block header with it, and keeps CRLF', () => {
+    const out = applyHostsBlock(windowsHosts, [{ ip: '172.29.1.2', domain: 'lv-oms.test' }]);
+    expect(out.split('\r\n').slice(0, 9)).toEqual([
+      '# Copyright (c) Microsoft Corp.',
+      '#',
+      '#\t::1             localhost',
+      '',
+      HOSTS_BEGIN,
+      '172.29.1.2 lv-oms.test',
+      HOSTS_END,
+      '',
+      '# Herd generated Hosts. Do not change.',
+    ]);
+    expect(out).not.toMatch(/[^\r]\n/);
   });
 
-  test('replaces an existing block and is idempotent', () => {
+  test('replaces an existing block in place and is idempotent', () => {
     const once = applyHostsBlock(windowsHosts, [{ ip: '1.1.1.1', domain: 'b.test' }]);
-    const twice = applyHostsBlock(once, [
+    const entries = [
       { ip: '2.2.2.2', domain: 'b.test' },
       { ip: '2.2.2.2', domain: 'a.test' },
-    ]);
+    ];
+    const twice = applyHostsBlock(once, entries);
     expect(twice).toContain('2.2.2.2 a.test\r\n2.2.2.2 b.test');
     expect(twice).not.toContain('1.1.1.1');
-    expect(applyHostsBlock(twice, [{ ip: '2.2.2.2', domain: 'a.test' }, { ip: '2.2.2.2', domain: 'b.test' }])).toBe(twice);
+    expect(applyHostsBlock(twice, entries)).toBe(twice);
   });
 
-  test('removing every site removes the block', () => {
+  test('moves an old block from the end to the front', () => {
+    const legacy = windowsHosts + [HOSTS_BEGIN, '1.1.1.1 b.test', HOSTS_END, ''].join('\r\n');
+    const out = applyHostsBlock(legacy, [{ ip: '1.1.1.1', domain: 'b.test' }]);
+    expect(out.indexOf(HOSTS_BEGIN)).toBeLessThan(out.indexOf('# Herd'));
+    expect(out.split(HOSTS_BEGIN).length).toBe(2);
+  });
+
+  test('removing every site restores the original file', () => {
     const withBlock = applyHostsBlock(windowsHosts, [{ ip: '1.1.1.1', domain: 'b.test' }]);
     expect(applyHostsBlock(withBlock, [])).toBe(windowsHosts);
   });
 
-  test('reports domains shadowed by lines outside the block', () => {
-    const content = applyHostsBlock(windowsHosts, [{ ip: '1.1.1.1', domain: 'hello.test' }]);
+  test('works on a file with no entries yet', () => {
+    expect(applyHostsBlock('# header\n', [{ ip: '1.1.1.1', domain: 'a.test' }])).toBe(
+      `# header\n\n${HOSTS_BEGIN}\n1.1.1.1 a.test\n${HOSTS_END}\n`,
+    );
+  });
+
+  test('reports names also listed by other tools', () => {
+    const content = applyHostsBlock(windowsHosts, [
+      { ip: '1.1.1.1', domain: 'lv-oms.test' },
+      { ip: '1.1.1.1', domain: 'hello.test' },
+    ]);
     expect(hostsConflicts(content, ['lv-oms.test', 'hello.test'])).toEqual(['lv-oms.test']);
   });
 });

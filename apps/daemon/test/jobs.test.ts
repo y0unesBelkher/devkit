@@ -15,7 +15,7 @@ describe('JobQueue', () => {
     const a = queue.enqueue('a', async (ctx) => {
       order.push('a-start');
       await Bun.sleep(20);
-      ctx.log('hello');
+      ctx.log('[32mhello[39m');
       order.push('a-end');
     });
     const b = queue.enqueue('b', async () => {

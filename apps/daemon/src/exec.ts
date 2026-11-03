@@ -7,6 +7,7 @@ export interface RunResult {
 export interface RunOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
+  cwd?: string;
 }
 
 /** Runs a program to completion (no shell) and collects its output. */
@@ -16,6 +17,7 @@ export async function run(argv: string[], options: RunOptions = {}): Promise<Run
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, ...options.env },
+    cwd: options.cwd,
   });
   const timer = options.timeoutMs ? setTimeout(() => proc.kill(), options.timeoutMs) : null;
   const [stdout, stderr, code] = await Promise.all([
@@ -40,6 +42,7 @@ export function streamLines(argv: string[], onLines: (lines: string[]) => void, 
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, ...options.env },
+    cwd: options.cwd,
   });
 
   const pump = async (stream: ReadableStream<Uint8Array>) => {

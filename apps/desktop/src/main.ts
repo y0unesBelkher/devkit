@@ -4,6 +4,7 @@ import type { ApiRequest, ClientMessage, ListenMode, OpenTarget } from '@devkit/
 import { installDaemon } from './bootstrap';
 import { api, connectionState } from './daemon-client';
 import { DaemonSocket } from './daemon-socket';
+import { dumpEnvKitDatabase } from './envkit';
 import { openPath, pickFile } from './shell-actions';
 import { setListenMode, syncHosts, trustCa, windowsStatus } from './windows';
 
@@ -60,20 +61,24 @@ function registerIpc(): void {
   ipcMain.handle('devkit:set-listen-mode', (_event, mode: ListenMode) => setListenMode(mode));
   ipcMain.handle('devkit:open-path', (_event, target: OpenTarget, path: string) => openPath(target, path));
   ipcMain.handle('devkit:pick-file', (_event, mode: 'open' | 'save', defaultName?: string) => pickFile(mode, defaultName));
+  ipcMain.handle('devkit:envkit-dump', (_event, database: string) => dumpEnvKitDatabase(database));
 }
 
 /** Headless flags (`electron . --status`): run one step without a window, print JSON, exit non-zero on failure. */
-const HEADLESS: Record<string, () => Promise<unknown>> = {
+const HEADLESS: Record<string, (value: string) => Promise<unknown>> = {
   '--status': connectionState,
   '--install-daemon': installDaemon,
   '--windows-status': windowsStatus,
   '--trust-ca': trustCa,
   '--sync-hosts': syncHosts,
+  '--envkit-dump': (database) => dumpEnvKitDatabase(database),
 };
 
-async function runHeadless(flag: string): Promise<void> {
+/** `--flag` or `--flag=value`. */
+async function runHeadless(arg: string): Promise<void> {
+  const [flag = '', value = ''] = arg.split(/=(.*)/s);
   try {
-    const result = await HEADLESS[flag]!();
+    const result = await HEADLESS[flag]!(value);
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     app.exit((result as { ok?: boolean }).ok === false ? 1 : 0);
   } catch (e) {
@@ -82,7 +87,7 @@ async function runHeadless(flag: string): Promise<void> {
   }
 }
 
-const headlessFlag = process.argv.find((arg) => arg in HEADLESS);
+const headlessFlag = process.argv.find((arg) => arg.split('=')[0]! in HEADLESS);
 
 if (headlessFlag) {
   void app.whenReady().then(() => runHeadless(headlessFlag));

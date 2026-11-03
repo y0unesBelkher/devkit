@@ -19,6 +19,7 @@ const bridge: DevkitBridge = {
   setListenMode: (mode) => ipcRenderer.invoke('devkit:set-listen-mode', mode),
   openPath: (target, path) => ipcRenderer.invoke('devkit:open-path', target, path),
   pickFile: (mode, defaultName) => ipcRenderer.invoke('devkit:pick-file', mode, defaultName),
+  dumpEnvKitDatabase: (database) => ipcRenderer.invoke('devkit:envkit-dump', database),
 };
 
 contextBridge.exposeInMainWorld('devkit', bridge);

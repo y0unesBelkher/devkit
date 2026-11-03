@@ -13,10 +13,12 @@ import {
   type DatabaseFileRequest,
   type DatabasesResponse,
   type DetectRequest,
+  type EnvKitImport,
   type FileOpRequest,
   type GroupRequest,
   type GroupsResponse,
   type InstallNodeRequest,
+  type MigrateRequest,
   type NodeGlobalRequest,
   type NodeInfo,
   type PhpExtensionAction,
@@ -62,6 +64,8 @@ import {
   prepareDump,
 } from './databases/databases.ts';
 import { fileOperation, listFiles, previewFile } from './files/files.ts';
+import { readEnvKit } from './migrate/envkit.ts';
+import { migrateProject, validateMigration } from './migrate/migrate.ts';
 import { detectProject, installedPhpVersions } from './sites/detect.ts';
 import { assignSite, createGroup, groupAction, renameGroup, requireGroup } from './sites/groups.ts';
 import { composerVersion, installComposer } from './tools/composer.ts';
@@ -484,6 +488,24 @@ const routes: Route[] = [
     handler: async ({ ctx }) => {
       await disableAdminer(ctx.store);
       return new Response(null, { status: 204 });
+    },
+  },
+  // Migration from EnvKit / Windows folders
+  {
+    method: 'GET',
+    path: '/api/migrate/envkit',
+    handler: ({ ctx }) => json(readEnvKit(ctx.store, ctx.config.user) satisfies EnvKitImport),
+  },
+  {
+    method: 'POST',
+    path: '/api/migrate',
+    handler: async ({ request, ctx }) => {
+      const body = await readJson<MigrateRequest>(request);
+      const { domain } = validateMigration(ctx.store, ctx.config.user, body);
+      return json(
+        ctx.jobs.enqueue(`Migrate ${domain}`, (job) => migrateProject(job, ctx.store, ctx.config.user, body), () => void ctx.hub.refresh()),
+        202,
+      );
     },
   },
   // Files (as the project user)

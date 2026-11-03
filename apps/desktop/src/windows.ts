@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { connect } from 'node:net';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -85,18 +86,35 @@ async function desiredHosts(): Promise<{ current: string; next: string; domains:
   return { current, next: applyHostsBlock(current, entries), domains: sites.map((s) => s.domain), network };
 }
 
+/** TCP connect from Windows, like the browser will; detects a dead localhost relay or a stale WSL IP. */
+function canConnect(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host, port });
+    const done = (ok: boolean) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
 export async function windowsStatus(): Promise<WindowsStatus> {
   const [hosts, owners, ca] = await Promise.all([
     desiredHosts(),
     portOwners(),
     daemon<CaInfo>({ method: 'GET', path: '/api/ca' }).catch(() => null),
   ]);
+  const target = hosts.network.hostsTarget;
   return {
     network: hosts.network,
     recommendedMode: owners.length > 0 ? 'wsl-ip' : 'localhost',
     portOwners: owners,
     ca: ca ? { thumbprint: ca.thumbprint, trusted: await isCaTrusted(ca.thumbprint) } : null,
     hosts: { inSync: hosts.next === hosts.current, conflicts: hostsConflicts(hosts.current, hosts.domains) },
+    // Only meaningful once there are sites for nginx to listen for.
+    reachable: target && hosts.domains.length ? await canConnect(target, 443) : null,
   };
 }
 

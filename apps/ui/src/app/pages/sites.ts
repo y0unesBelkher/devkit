@@ -79,7 +79,7 @@ type Busy = null | 'load' | 'detect' | 'create' | 'update' | 'delete' | 'trust' 
             }
             @if (s.hosts.conflicts.length) {
               <p class="mt-2 text-xs text-amber-300">
-                Also defined outside DevKit's block (EnvKit?), which wins: {{ s.hosts.conflicts.join(', ') }}
+                Also listed by EnvKit or Herd (DevKit's line comes first and wins): {{ s.hosts.conflicts.join(', ') }}
               </p>
             }
           </div>

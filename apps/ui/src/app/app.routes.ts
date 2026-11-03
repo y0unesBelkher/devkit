@@ -7,6 +7,7 @@ import { Tools } from './pages/tools';
 import { Groups } from './pages/groups';
 import { Databases } from './pages/databases';
 import { Files } from './pages/files';
+import { Migrate } from './pages/migrate';
 
 export interface NavItem {
   path: string;
@@ -22,6 +23,7 @@ export const NAV: NavItem[] = [
   { path: 'tools', label: 'Tools' },
   { path: 'databases', label: 'Databases' },
   { path: 'files', label: 'Files' },
+  { path: 'migrate', label: 'Migrate' },
   { path: 'settings', label: 'Settings' },
 ];
 
@@ -34,6 +36,7 @@ export const routes: Routes = [
   { path: 'groups', component: Groups, title: 'Groups · DevKit' },
   { path: 'databases', component: Databases, title: 'Databases · DevKit' },
   { path: 'files', component: Files, title: 'Files · DevKit' },
+  { path: 'migrate', component: Migrate, title: 'Migrate · DevKit' },
   ...NAV.filter((item) => item.milestone !== undefined || item.path === 'settings').map((item) => ({
     path: item.path,
     component: ComingSoon,
