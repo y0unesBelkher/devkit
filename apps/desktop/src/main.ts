@@ -10,6 +10,7 @@ import { getSettings, saveSettings } from './settings';
 import { openPath, pickFile } from './shell-actions';
 import { TrayController } from './tray';
 import { setListenMode, syncHosts, trustCa, windowsStatus } from './windows';
+import { WslKeepAlive } from './wsl';
 
 const devServerUrl = process.env['DEVKIT_UI_URL'] ?? (app.isPackaged ? null : 'http://localhost:4200');
 
@@ -76,6 +77,7 @@ function quit(): void {
   app.quit();
 }
 
+const keepAlive = new WslKeepAlive();
 const socket = new DaemonSocket((event) => {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send('devkit:event', event);
   if (event.type === 'services') tray?.setServices(event.services);
@@ -143,10 +145,12 @@ if (headlessFlag) {
     const hidden = process.argv.includes('--hidden');
     mainWindow = createWindow(!hidden);
     tray = new TrayController(showWindow, quit);
+    keepAlive.start();
     socket.start();
   });
 
   app.on('before-quit', () => {
+    keepAlive.stop();
     quitting = true;
   });
   // With the tray, closing the last window does not quit; the tray's "Quit DevKit" does.

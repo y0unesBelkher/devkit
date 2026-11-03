@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 /** WSL distro DevKit manages. */
 export const DISTRO = process.env['DEVKIT_DISTRO'] ?? 'Ubuntu';
@@ -68,4 +68,34 @@ function run(command: string, argv: string[], options: WslOptions): Promise<WslR
     });
     child.stdin.end(options.input ?? '');
   });
+}
+
+/**
+ * WSL stops the VM (and every systemd service in it, devkitd included) shortly after the last
+ * wsl.exe client exits. One idle client held for the app's lifetime keeps the stack running;
+ * it is restarted if it ends, e.g. after `wsl --shutdown`.
+ */
+export class WslKeepAlive {
+  private child: ChildProcess | null = null;
+  private stopped = false;
+
+  start(): void {
+    this.stopped = false;
+    if (this.child) return;
+    const child = spawn('wsl.exe', ['-d', DISTRO, '-e', 'sleep', 'infinity'], { windowsHide: true, stdio: 'ignore' });
+    this.child = child;
+    const restart = () => {
+      if (this.child !== child) return;
+      this.child = null;
+      if (!this.stopped) setTimeout(() => this.start(), 5000);
+    };
+    child.once('exit', restart);
+    child.once('error', restart);
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.child?.kill();
+    this.child = null;
+  }
 }

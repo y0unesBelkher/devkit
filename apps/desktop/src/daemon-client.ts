@@ -93,9 +93,11 @@ export async function api<T>(request: ApiRequest, retry = true): Promise<ApiResu
       token = null;
       return api(request, false);
     }
-    const body = (await res.json()) as unknown;
+    // 204 and other empty replies have no JSON to parse.
+    const text = await res.text();
+    const body = (text ? JSON.parse(text) : null) as unknown;
     if (!res.ok) {
-      const message = (body as { error?: string }).error ?? res.statusText;
+      const message = (body as { error?: string } | null)?.error ?? res.statusText;
       return { ok: false, status: res.status, error: message };
     }
     return { ok: true, status: res.status, data: body as T };

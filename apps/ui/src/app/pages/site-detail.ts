@@ -394,9 +394,10 @@ export class SiteDetail implements OnInit {
     if (!confirm(`Remove ${site.domain}? Its nginx config, certificate and processes are deleted; the folder and database stay.`)) return;
     const result = await this.daemon.api({ method: 'DELETE', path: `/api/sites/${site.id}` });
     if (!result.ok) return this.sites.notice.set({ ok: false, message: result.error });
-    await this.daemon.windows.syncHosts();
-    await this.sites.load();
+    await this.router.navigate(['/sites']);
     this.sites.notice.set({ ok: true, message: `${site.domain} was removed.` });
-    void this.router.navigate(['/sites']);
+    // The hosts entry goes last: it may wait on a UAC prompt.
+    const hosts = await this.daemon.windows.syncHosts();
+    if (!hosts.ok) this.sites.notice.set({ ok: false, message: `${site.domain} was removed, but ${hosts.message}` });
   }
 }
