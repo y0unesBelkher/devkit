@@ -597,17 +597,56 @@ function withoutHostsBlock(lines: string[]): string[] {
   return [...lines.slice(0, begin), ...lines.slice(after)];
 }
 
+/** Marks another tool's line that DevKit switched off because DevKit now serves that name. */
+export const HOSTS_DISABLED = '#DevKit-moved: ';
+/** Suffix of a line DevKit split off a switched-off line to keep its other names working. */
+const HOSTS_KEPT = '#DevKit-kept';
+
+/** "127.0.0.1 a.test b.test # note" → ["a.test", "b.test"]. */
+function hostNames(line: string): string[] {
+  const [, ...names] = line.replace(/#.*/, '').trim().split(/\s+/);
+  return names.map((name) => name.toLowerCase()).filter(Boolean);
+}
+
+/**
+ * Windows returns every address listed for a name and sorts loopback first, so an old
+ * `127.0.0.1 lv-oms.test` (EnvKit, Herd) would beat DevKit's line wherever it sits. Lines for names DevKit
+ * serves are therefore switched off with a marker, and switched back on once DevKit stops serving them.
+ */
+function reconcileOtherLines(lines: string[], managed: Set<string>): string[] {
+  const result: string[] = [];
+  for (const line of lines) {
+    // Split-off lines are regenerated below from the line they came from.
+    if (line.endsWith(HOSTS_KEPT)) continue;
+    const original = line.startsWith(HOSTS_DISABLED) ? line.slice(HOSTS_DISABLED.length) : line;
+    const names = isEntry(original) ? hostNames(original) : [];
+    if (!names.some((name) => managed.has(name))) {
+      result.push(original);
+      continue;
+    }
+    result.push(HOSTS_DISABLED + original);
+    // Keep the names DevKit does not serve working (a line can list several).
+    const kept = names.filter((name) => !managed.has(name));
+    if (kept.length) result.push(`${original.trim().split(/\s+/)[0]} ${kept.join(' ')} ${HOSTS_KEPT}`);
+  }
+  return result;
+}
+
+/** Where the DevKit block goes: in front of the first entry, active or switched off by DevKit. */
+const isPlacementEntry = (line: string) => isEntry(line) || line.startsWith(HOSTS_DISABLED);
+
 /**
  * Writes the DevKit block in front of the first block of entries (keeping that block's header comment
- * with it). Windows uses the first matching line, so a migrated site resolves to DevKit even while an
- * older line for the same name (EnvKit, Herd) is still further down. Line endings are preserved.
+ * with it) and switches off other tools' lines for the same names. Removing every DevKit site restores
+ * the file as it was. Line endings are preserved.
  */
 export function applyHostsBlock(content: string, entries: HostsEntry[]): string {
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
-  const lines = withoutHostsBlock(content.split(/\r?\n/));
+  const managed = new Set(entries.map((e) => e.domain.toLowerCase()));
+  const lines = reconcileOtherLines(withoutHostsBlock(content.split(/\r?\n/)), managed);
   if (entries.length === 0) return lines.join(eol);
 
-  let at = lines.findIndex(isEntry);
+  let at = lines.findIndex(isPlacementEntry);
   if (at === -1) {
     at = lines.length;
     while (at > 0 && lines[at - 1] === '') at--;
@@ -624,7 +663,7 @@ export function applyHostsBlock(content: string, entries: HostsEntry[]): string 
   return result.join(eol);
 }
 
-/** Domains also listed outside the DevKit block (EnvKit, Herd); DevKit's block comes first, so its entries win. */
+/** DevKit names that another tool also lists, whether DevKit has already switched that line off or not. */
 export function hostsConflicts(content: string, domains: string[]): string[] {
   const lines = content.split(/\r?\n/);
   const begin = lines.indexOf(HOSTS_BEGIN);
@@ -632,8 +671,8 @@ export function hostsConflicts(content: string, domains: string[]): string[] {
   const outside = new Set<string>();
   lines.forEach((line, i) => {
     if (begin !== -1 && end !== -1 && i >= begin && i <= end) return;
-    const [ip, ...names] = line.replace(/#.*/, '').trim().split(/\s+/);
-    if (ip) names.forEach((name) => outside.add(name.toLowerCase()));
+    const text = line.startsWith(HOSTS_DISABLED) ? line.slice(HOSTS_DISABLED.length) : line;
+    if (isEntry(text)) hostNames(text).forEach((name) => outside.add(name));
   });
   return domains.filter((domain) => outside.has(domain));
 }

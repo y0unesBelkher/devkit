@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { HOSTS_BEGIN, HOSTS_END, applyHostsBlock, hostsConflicts, validateDomain, type Site } from '@devkit/shared';
+import { HOSTS_BEGIN, HOSTS_DISABLED, HOSTS_END, applyHostsBlock, hostsConflicts, validateDomain, type Site } from '@devkit/shared';
 import { parseIpAddr } from '../src/sites/network.ts';
 import { renderListen, renderStaticVhost } from '../src/sites/nginx.ts';
 import { Store } from '../src/store.ts';
@@ -87,6 +87,21 @@ describe('hosts block', () => {
     expect(applyHostsBlock('# header\n', [{ ip: '1.1.1.1', domain: 'a.test' }])).toBe(
       `# header\n\n${HOSTS_BEGIN}\n1.1.1.1 a.test\n${HOSTS_END}\n`,
     );
+  });
+
+  test('switches off other tools\' lines for names DevKit serves, and restores them later', () => {
+    const multi = windowsHosts.replace('# END envkit', '127.0.0.1 ng-oms.test lv-oms.test\r\n# END envkit');
+    const out = applyHostsBlock(multi, [{ ip: '172.29.1.2', domain: 'lv-oms.test' }]);
+    const lines = out.split('\r\n');
+    // Only DevKit's line for lv-oms.test is still active.
+    expect(lines.filter((l) => !l.startsWith('#') && l.includes('lv-oms.test'))).toEqual(['172.29.1.2 lv-oms.test']);
+    expect(lines).toContain(`${HOSTS_DISABLED}127.0.0.1 lv-oms.test`);
+    // A line listing several names keeps the ones DevKit does not serve.
+    expect(lines).toContain(`${HOSTS_DISABLED}127.0.0.1 ng-oms.test lv-oms.test`);
+    expect(lines).toContain('127.0.0.1 ng-oms.test #DevKit-kept');
+    expect(applyHostsBlock(out, [{ ip: '172.29.1.2', domain: 'lv-oms.test' }])).toBe(out);
+    // Removing the DevKit site brings the original lines back.
+    expect(applyHostsBlock(out, [])).toBe(multi);
   });
 
   test('reports names also listed by other tools', () => {
