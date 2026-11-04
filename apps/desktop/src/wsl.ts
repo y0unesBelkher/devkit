@@ -99,3 +99,8 @@ export class WslKeepAlive {
     this.child = null;
   }
 }
+
+/** Stops the distro so it boots again with a changed /etc/wsl.conf. */
+export async function terminateDistro(): Promise<void> {
+  await run('wsl.exe', ['--terminate', DISTRO], { timeoutMs: 60_000 });
+}

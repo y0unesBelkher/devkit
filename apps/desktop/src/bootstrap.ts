@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { app } from 'electron';
 import { DAEMON_PATHS, DAEMON_PORT, type BootstrapResult, type DaemonConfig } from '@devkit/shared';
 import { forgetToken, waitForPing } from './daemon-client';
-import { DISTRO, listDistros, shQuote, wsl } from './wsl';
+import { DISTRO, listDistros, shQuote, terminateDistro, wsl } from './wsl';
 
 /** The Linux daemon binary shipped with the app (built by `npm run build:daemon`). */
 export function bundledDaemonPath(): string {
@@ -25,6 +25,20 @@ RestartSec=2
 WantedBy=multi-user.target
 `;
 
+/** Sets `[boot] systemd=true` in /etc/wsl.conf, keeping whatever else the file holds. */
+const enableSystemdScript = `set -e
+f=/etc/wsl.conf
+touch "$f"
+if grep -qE '^\\s*systemd\\s*=' "$f"; then sed -i -E 's/^\\s*systemd\\s*=.*/systemd=true/' "$f"
+elif grep -qE '^\\s*\\[boot\\]' "$f"; then sed -i -E '/^\\s*\\[boot\\]/a systemd=true' "$f"
+else printf '\\n[boot]\\nsystemd=true\\n' >> "$f"
+fi
+`;
+
+async function systemdRunning(): Promise<boolean> {
+  return (await wsl(['test', '-d', '/run/systemd/system'])).code === 0;
+}
+
 /**
  * Installs (or upgrades) devkitd as a root systemd service in the distro.
  * `wsl -u root` needs no password, so this never prompts.
@@ -37,8 +51,22 @@ export async function installDaemon(): Promise<BootstrapResult> {
   };
 
   const distros = await listDistros();
-  if (!distros.includes(DISTRO)) return fail(`WSL distro "${DISTRO}" not found (have: ${distros.join(', ') || 'none'}).`);
+  if (!distros.includes(DISTRO)) {
+    return fail(
+      `WSL distro "${DISTRO}" not found (have: ${distros.join(', ') || 'none'}). ` +
+        `Install it from PowerShell with "wsl --install -d ${DISTRO}", create your Linux user, then click Install again.`,
+    );
+  }
   log.push(`Distro: ${DISTRO}`);
+
+  // Every service DevKit manages is a systemd unit; older or fresh distros may boot without it.
+  if (!(await systemdRunning())) {
+    log.push('systemd is off in this distro: enabling it in /etc/wsl.conf and restarting the distro.');
+    const enable = await wsl(['bash', '-s'], { user: 'root', input: enableSystemdScript, timeoutMs: 30_000 });
+    if (enable.code !== 0) return fail(`Could not edit /etc/wsl.conf: ${enable.stderr.trim()}`);
+    await terminateDistro();
+    if (!(await systemdRunning())) return fail('systemd is still not running. Run "wsl --shutdown" in PowerShell and click Install again.');
+  }
 
   const binary = bundledDaemonPath();
   if (!existsSync(binary)) return fail(`Daemon binary missing at ${binary}. Run "npm run build:daemon".`);

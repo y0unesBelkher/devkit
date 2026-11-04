@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { MIGRATE_ENABLED } from './core/features';
 import { Dashboard } from './pages/dashboard';
 import { Databases } from './pages/databases';
 import { Files } from './pages/files';
@@ -21,7 +22,7 @@ export const NAV: NavItem[] = [
   { path: 'tools', label: 'Tools' },
   { path: 'databases', label: 'Databases' },
   { path: 'files', label: 'Files' },
-  { path: 'migrate', label: 'Migrate' },
+  ...(MIGRATE_ENABLED ? [{ path: 'migrate', label: 'Migrate' }] : []),
   { path: 'settings', label: 'Settings' },
 ];
 
@@ -36,7 +37,7 @@ export const routes: Routes = [
   { path: 'tools', component: Tools, title: 'Tools · DevKit' },
   { path: 'databases', component: Databases, title: 'Databases · DevKit' },
   { path: 'files', component: Files, title: 'Files · DevKit' },
-  { path: 'migrate', component: Migrate, title: 'Migrate · DevKit' },
+  ...(MIGRATE_ENABLED ? [{ path: 'migrate', component: Migrate, title: 'Migrate · DevKit' }] : []),
   { path: 'settings', component: Settings, title: 'Settings · DevKit' },
   { path: '**', redirectTo: 'dashboard' },
 ];

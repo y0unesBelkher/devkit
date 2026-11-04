@@ -67,7 +67,8 @@
       "runAfterFinish": false,
       "deleteAppDataOnUninstall": false,
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "artifactName": "DevKit-Setup-${version}.exe"
     },
     "electronVersion": "45.2.1",
     "extraMetadata": {

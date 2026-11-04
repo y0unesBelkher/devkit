@@ -7,6 +7,7 @@ import { AddSite } from '../components/add-site';
 import { Dialogs } from '../components/dialogs';
 import { Icon } from '../components/icon';
 import { Daemon } from '../core/daemon';
+import { MIGRATE_ENABLED } from '../core/features';
 import { SitesStore, formatBytes } from '../core/sites-store';
 
 export const TYPE_LABELS: Record<SiteType, string> = { laravel: 'Laravel', angular: 'Angular', php: 'PHP', static: 'Static' };
@@ -84,10 +85,12 @@ export const HEALTH_DOT = { ok: 'bg-emerald-400', partial: 'bg-amber-400', faile
       @if (!store.sites().length) {
         <div class="mt-16 text-center">
           <p class="text-zinc-400">No sites yet.</p>
-          <p class="mt-1 text-sm text-zinc-500">Add a project folder from WSL, or bring your EnvKit sites over.</p>
+          <p class="mt-1 text-sm text-zinc-500">Add a project folder from WSL to get started.</p>
           <div class="mt-4 flex justify-center gap-2">
             <button class="dk-btn-primary" (click)="adding.set(true)">Add site</button>
-            <a class="dk-btn" routerLink="/migrate">Migrate from EnvKit</a>
+            @if (migrateEnabled) {
+              <a class="dk-btn" routerLink="/migrate">Migrate from EnvKit</a>
+            }
           </div>
         </div>
       }
@@ -141,6 +144,7 @@ export class Sites implements OnInit {
   private readonly dialogs = inject(Dialogs);
 
   protected readonly labels = TYPE_LABELS;
+  protected readonly migrateEnabled = MIGRATE_ENABLED;
   protected readonly adding = signal(false);
   protected readonly collapsed = signal(new Set<string>());
   protected query = '';
