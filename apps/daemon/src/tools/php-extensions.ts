@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
-import { PHP_VERSIONS, type PhpExtension, type PhpExtensionAction, type PhpToolInfo } from '@devkit/shared';
+import type { PhpExtension, PhpExtensionAction, PhpToolInfo } from '@devkit/shared';
+import { compareVersions, phpVersions } from '../services/php-versions.ts';
 import { run } from '../exec.ts';
 import { HttpError } from '../http-error.ts';
 import type { JobContext } from '../jobs.ts';
@@ -10,6 +11,8 @@ interface ExtensionDef {
   /** PHP module names the package provides (what phpenmod and conf.d use). */
   modules: string[];
   builtin?: boolean;
+  /** Compiled into PHP from this version on, with no package of its own (OPcache in 8.5). */
+  builtinSince?: string;
   toggleable?: boolean;
 }
 
@@ -24,7 +27,7 @@ export const PHP_EXTENSIONS: ExtensionDef[] = [
   { name: 'memcached', modules: ['memcached'], toggleable: true },
   { name: 'mongodb', modules: ['mongodb'], toggleable: true },
   { name: 'mysql', modules: ['mysqli', 'pdo_mysql'] },
-  { name: 'opcache', modules: ['opcache'], toggleable: true },
+  { name: 'opcache', modules: ['opcache'], toggleable: true, builtinSince: '8.5' },
   { name: 'pcntl', modules: ['pcntl'], builtin: true },
   { name: 'pgsql', modules: ['pgsql', 'pdo_pgsql'] },
   { name: 'redis', modules: ['redis'], toggleable: true },
@@ -48,9 +51,13 @@ const APT_ENV = { DEBIAN_FRONTEND: 'noninteractive', NEEDRESTART_MODE: 'a' };
 const APT_OPTS = ['-o', 'DPkg::Lock::Timeout=300', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'];
 
 export function requirePhpVersion(version: string): string {
-  if (!(PHP_VERSIONS as readonly string[]).includes(version)) throw new HttpError(404, `Unknown PHP version "${version}"`);
+  if (!phpVersions().includes(version)) throw new HttpError(404, `Unknown PHP version "${version}"`);
   if (!existsSync(`/etc/php/${version}`)) throw new HttpError(409, `PHP ${version} is not installed`);
   return version;
+}
+
+export function isBuiltin(ext: ExtensionDef, version: string): boolean {
+  return !!ext.builtin || (!!ext.builtinSince && compareVersions(version, ext.builtinSince) >= 0);
 }
 
 export function requireExtension(name: string): ExtensionDef {
@@ -74,15 +81,18 @@ function readConfD(version: string, sapi: 'fpm' | 'cli'): string[] {
 
 export async function phpToolInfo(version: string): Promise<PhpToolInfo> {
   const [packages, release, cliModules] = await Promise.all([
-    installedPackages(PHP_EXTENSIONS.filter((e) => !e.builtin).map((e) => `php${version}-${e.name}`)),
+    installedPackages(PHP_EXTENSIONS.filter((e) => !isBuiltin(e, version)).map((e) => `php${version}-${e.name}`)),
     run([`php${version}`, '-r', 'echo PHP_VERSION;']).then((r) => (r.code === 0 ? r.stdout.trim() : null)),
     run([`php${version}`, '-m']).then((r) => new Set(r.stdout.split('\n').map((line) => line.trim().toLowerCase()))),
   ]);
   const fpm = enabledModules(readConfD(version, 'fpm'));
   const extensions: PhpExtension[] = PHP_EXTENSIONS.map((ext) => {
-    const installed = ext.builtin ? cliModules.has(ext.modules[0]!) : packages.has(`php${version}-${ext.name}`);
-    const enabled = ext.builtin ? installed : installed && ext.modules.every((module) => fpm.has(module));
-    return { name: ext.name, installed, enabled, builtin: !!ext.builtin, toggleable: !!ext.toggleable };
+    const builtin = isBuiltin(ext, version);
+    // `php -m` lists Zend extensions by their full name ("Zend OPcache").
+    const module = ext.modules[0]!;
+    const installed = builtin ? cliModules.has(module) || cliModules.has(`zend ${module}`) : packages.has(`php${version}-${ext.name}`);
+    const enabled = builtin ? installed : installed && ext.modules.every((m) => fpm.has(m));
+    return { name: ext.name, installed, enabled, builtin, toggleable: !builtin && !!ext.toggleable };
   });
   return { version, release, extensions };
 }
@@ -100,7 +110,7 @@ async function setEnabled(version: string, ext: ExtensionDef, enabled: boolean):
 /** enable/disable run immediately; install/uninstall go through the apt job queue. */
 export async function toggleExtension(version: string, name: string, action: 'enable' | 'disable'): Promise<void> {
   const ext = requireExtension(name);
-  if (!ext.toggleable) throw new HttpError(422, `${name} cannot be switched off on its own`);
+  if (!ext.toggleable || isBuiltin(ext, version)) throw new HttpError(422, `${name} cannot be switched off on its own`);
   if (!(await installedPackages([`php${version}-${name}`])).size) throw new HttpError(409, `${name} is not installed for PHP ${version}`);
   await setEnabled(version, ext, action === 'enable');
 }
@@ -111,7 +121,7 @@ export function isQueuedAction(action: PhpExtensionAction): action is 'install' 
 
 export async function installExtension(ctx: JobContext, version: string, name: string): Promise<void> {
   const ext = requireExtension(name);
-  if (ext.builtin) throw new HttpError(422, `${name} is built into PHP`);
+  if (isBuiltin(ext, version)) throw new HttpError(422, `${name} is built into PHP ${version}`);
   await ctx.exec(['apt-get', 'install', '-y', ...APT_OPTS, `php${version}-${name}`], APT_ENV);
   if (name === 'xdebug') {
     // Xdebug slows every request, so it starts switched off; the Tools page turns it on per version.
@@ -124,7 +134,7 @@ export async function installExtension(ctx: JobContext, version: string, name: s
 
 export async function uninstallExtension(ctx: JobContext, version: string, name: string): Promise<void> {
   const ext = requireExtension(name);
-  if (ext.builtin) throw new HttpError(422, `${name} is built into PHP`);
+  if (isBuiltin(ext, version)) throw new HttpError(422, `${name} is built into PHP ${version}`);
   await ctx.exec(['apt-get', 'remove', '-y', ...APT_OPTS, `php${version}-${name}`], APT_ENV);
   await reloadFpm(version);
 }

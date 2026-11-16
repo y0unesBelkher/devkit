@@ -4,6 +4,7 @@ import { run } from '../exec.ts';
 import { HttpError } from '../http-error.ts';
 import type { JobContext } from '../jobs.ts';
 import { catalog, findService, toInfo, type ServiceDefinition } from './catalog.ts';
+import { refreshPhpVersions } from './php-versions.ts';
 import { installedPackages, packagesNeedingRepair, shortVersion, unitStates } from './system-tools.ts';
 
 const APT_ENV = { DEBIAN_FRONTEND: 'noninteractive', NEEDRESTART_MODE: 'a' };
@@ -17,11 +18,12 @@ export function requireService(id: string): ServiceDefinition {
 }
 
 export async function listServices(): Promise<ServiceStatus[]> {
+  const services = catalog();
   const [versions, states] = await Promise.all([
-    installedPackages(catalog.map((def) => def.package)),
-    unitStates(catalog.map((def) => def.unit)),
+    installedPackages(services.map((def) => def.package)),
+    unitStates(services.map((def) => def.unit)),
   ]);
-  return catalog.map((def) => {
+  return services.map((def) => {
     const version = versions.get(def.package);
     const state = states.get(def.unit);
     return {
@@ -68,6 +70,7 @@ export async function repairPackages(ctx: JobContext): Promise<void> {
     ctx.log(`${e.message}; letting apt fix the remaining dependencies.`);
   });
   await ctx.exec(['apt-get', 'update', ...APT_OPTS], APT_ENV);
+  await refreshPhpVersions();
   await ctx.exec(['apt-get', 'install', '-f', '-y', ...APT_OPTS], APT_ENV);
   const remaining = await packagesNeedingRepair();
   if (remaining > 0) throw new Error(`${remaining} packages still need attention; see "dpkg --audit" in WSL.`);
@@ -87,6 +90,7 @@ export async function installService(def: ServiceDefinition, ctx: JobContext): P
     await ctx.exec(['add-apt-repository', '-y', `ppa:${def.ppa}`], APT_ENV);
   }
   await ctx.exec(['apt-get', 'update', ...APT_OPTS], APT_ENV);
+  await refreshPhpVersions();
   await ctx.exec(['apt-get', 'install', '-y', ...APT_OPTS, ...def.installPackages], APT_ENV);
   await ctx.exec(['systemctl', 'enable', '--now', def.unit]);
 }

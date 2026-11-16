@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path/posix';
-import { PHP_VERSIONS, SITE_TLD, type DetectResult, type SiteType } from '@devkit/shared';
+import { SITE_TLD, type DetectResult, type SiteType } from '@devkit/shared';
 import { listNodeVersions, pickNodeVersion } from '../node/fnm.ts';
+import { phpVersions, stablePhpVersions } from '../services/php-versions.ts';
 import { installedPackages } from '../services/system-tools.ts';
 import { databaseFromEnv, readDotEnv } from './dotenv.ts';
 import { pickPhpVersion } from './php-constraint.ts';
@@ -62,8 +63,9 @@ export function docrootFor(type: SiteType, root: string): string {
 }
 
 export async function installedPhpVersions(): Promise<string[]> {
-  const installed = await installedPackages(PHP_VERSIONS.map((v) => `php${v}-fpm`));
-  return PHP_VERSIONS.filter((v) => installed.has(`php${v}-fpm`));
+  const versions = phpVersions();
+  const installed = await installedPackages(versions.map((v) => `php${v}-fpm`));
+  return versions.filter((v) => installed.has(`php${v}-fpm`));
 }
 
 export async function mysqlInstalled(): Promise<boolean> {
@@ -76,7 +78,11 @@ export async function detectProject(requestedRoot: string, user: string): Promis
   const [phpInstalled, hasMysql] = await Promise.all([installedPhpVersions(), mysqlInstalled()]);
   const usesPhp = type === 'php' || type === 'laravel';
   const constraint = usesPhp ? (readComposer(root)?.require?.['php'] ?? null) : null;
-  const phpVersion = usesPhp ? pickPhpVersion(constraint, phpInstalled) : null;
+  // An installed pre-release is only used when no released version fits.
+  const stable = stablePhpVersions();
+  const phpVersion = usesPhp
+    ? (pickPhpVersion(constraint, phpInstalled.filter((v) => stable.includes(v))) ?? pickPhpVersion(constraint, phpInstalled))
+    : null;
   const database = type === 'laravel' ? databaseFromEnv(readDotEnv(root)) : null;
   const nodeInstalled = listNodeVersions(user);
   const nodeWanted = type === 'angular' ? nodeRequirement(root) : null;
@@ -91,7 +97,7 @@ export async function detectProject(requestedRoot: string, user: string): Promis
   if (usesPhp && phpInstalled.length === 0) {
     warnings.push('No PHP version is installed yet. Install one on the Services page.');
   } else if (usesPhp && !phpVersion) {
-    const wanted = pickPhpVersion(constraint, PHP_VERSIONS);
+    const wanted = pickPhpVersion(constraint, stable);
     warnings.push(
       `composer.json requires PHP ${constraint}, which no installed version satisfies.` +
         (wanted ? ` Install PHP ${wanted} on the Services page.` : ''),
@@ -113,7 +119,7 @@ export async function detectProject(requestedRoot: string, user: string): Promis
     phpConstraint: constraint,
     phpVersion,
     installedPhpVersions: phpInstalled,
-    phpSuggested: usesPhp ? pickPhpVersion(constraint, PHP_VERSIONS) : null,
+    phpSuggested: usesPhp ? pickPhpVersion(constraint, stable) : null,
     nodeRequirement: nodeWanted,
     nodeVersion,
     installedNodeVersions: nodeInstalled,

@@ -1,20 +1,23 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { PHP_VERSIONS, type SystemResources } from '@devkit/shared';
+import type { SystemResources } from '@devkit/shared';
 import { run } from './exec.ts';
 import type { JobContext } from './jobs.ts';
 import { installNode, listNodeVersions, nodeBinDir } from './node/fnm.ts';
 import { findService } from './services/catalog.ts';
+import { stablePhpVersions } from './services/php-versions.ts';
 import { installService, listServices } from './services/services.ts';
 import { COMPOSER_BIN, installComposer } from './tools/composer.ts';
 import { changeGlobal } from './tools/npm-globals.ts';
 
-/** What a Laravel + Angular machine needs; the newest PHP comes with Laravel's usual extensions. */
-export const RECOMMENDED_SERVICES = ['nginx', `php${PHP_VERSIONS.at(-1)}`, 'mysql', 'redis'];
+/** What a Laravel + Angular machine needs; the newest released PHP comes with Laravel's usual extensions. */
+export function recommendedServices(): string[] {
+  return ['nginx', `php${stablePhpVersions().at(-1)}`, 'mysql', 'redis'];
+}
 
 /** Installs whatever of the recommended stack is missing, in one job; installed parts are skipped. */
 export async function installRecommendedStack(ctx: JobContext, user: string): Promise<void> {
   const installed = new Set((await listServices()).filter((s) => s.installed).map((s) => s.id));
-  for (const id of RECOMMENDED_SERVICES) {
+  for (const id of recommendedServices()) {
     const def = findService(id)!;
     if (installed.has(id)) {
       ctx.log(`✓ ${def.name} is already installed`);

@@ -8,6 +8,7 @@ import { COMPOSER_BIN, composerVersion, installComposer, latestComposerVersion }
 import { outdatedGlobals, updateAllGlobals } from './npm-globals.ts';
 import { phpToolInfo } from './php-extensions.ts';
 import { installedPhpVersions } from '../sites/detect.ts';
+import { refreshPhpVersions } from '../services/php-versions.ts';
 import { packagesNeedingRepair, shortVersion } from '../services/system-tools.ts';
 
 const APT_ENV = { DEBIAN_FRONTEND: 'noninteractive', NEEDRESTART_MODE: 'a' };
@@ -53,6 +54,7 @@ export async function toolUpdates(user: string): Promise<ToolUpdates> {
 
 export async function refreshPackageLists(ctx: JobContext): Promise<void> {
   await ctx.exec(['apt-get', 'update', ...APT_OPTS], APT_ENV);
+  await refreshPhpVersions();
   const updates = await aptUpgradable();
   ctx.log(updates.length ? `${updates.length} DevKit-managed package updates available.` : 'All DevKit-managed packages are current.');
 }

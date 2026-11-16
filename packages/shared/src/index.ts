@@ -5,7 +5,7 @@
 export const DAEMON_PORT = 7765;
 
 /** Version of the daemon bundled with this build of the desktop app. */
-export const DAEMON_VERSION = '0.9.0';
+export const DAEMON_VERSION = '0.10.0';
 
 /** Paths inside WSL owned by the daemon. */
 export const DAEMON_PATHS = {
@@ -189,8 +189,14 @@ export interface CaInfo {
 // ---------------------------------------------------------------------------
 // Sites
 
-/** PHP versions DevKit installs from the ondrej/php PPA, oldest first. */
-export const PHP_VERSIONS = ['8.1', '8.2', '8.3', '8.4'] as const;
+/**
+ * PHP versions DevKit always offers, oldest first. The daemon adds newer ones (and their pre-releases)
+ * that apt finds in the ondrej/php PPA, so new PHP releases need no DevKit update.
+ */
+export const PHP_VERSIONS = ['8.1', '8.2', '8.3', '8.4', '8.5'] as const;
+
+/** Oldest PHP version DevKit offers, even when apt has older ones. */
+export const MIN_PHP_VERSION = '8.1';
 
 export type SiteType = 'static' | 'php' | 'laravel' | 'angular';
 

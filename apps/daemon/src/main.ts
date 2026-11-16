@@ -4,6 +4,7 @@ import { loadConfig, paths } from './config.ts';
 import { Hub, type SocketData } from './hub.ts';
 import { JobQueue } from './jobs.ts';
 import { createFetch } from './server.ts';
+import { refreshPhpVersions } from './services/php-versions.ts';
 import { syncPhpShim } from './sites/php-shim.ts';
 import { refreshVhosts, syncNetwork } from './sites/sites.ts';
 import { Store } from './store.ts';
@@ -37,6 +38,8 @@ const server = Bun.serve<SocketData>({
 console.log(`devkitd ${DAEMON_VERSION} listening on ${server.url} (project user: ${config.user})`);
 
 syncPhpShim(store.listSites());
+// New PHP releases (e.g. from the ondrej/php PPA) appear without a DevKit update.
+refreshPhpVersions().catch((e: Error) => console.error(`PHP version scan failed: ${e.message}`));
 
 // WSL gets a new IP on every restart; point nginx at it before anyone opens a site.
 // Then bring every vhost up to the current templates (they may have changed in this version).

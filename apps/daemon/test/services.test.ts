@@ -5,12 +5,12 @@ import { parseDpkgQuery, parseSystemctlShow, shortVersion } from '../src/service
 
 describe('catalog', () => {
   test('ids and units are unique', () => {
-    expect(new Set(catalog.map((s) => s.id)).size).toBe(catalog.length);
-    expect(new Set(catalog.map((s) => s.unit)).size).toBe(catalog.length);
+    expect(new Set(catalog().map((s) => s.id)).size).toBe(catalog().length);
+    expect(new Set(catalog().map((s) => s.unit)).size).toBe(catalog().length);
   });
 
   test('every service exposes the journal first', () => {
-    for (const def of catalog) expect(def.logSources[0]?.id).toBe('journal');
+    for (const def of catalog()) expect(def.logSources[0]?.id).toBe('journal');
   });
 
   test('php versions come from the ondrej PPA with fpm first', () => {
@@ -18,6 +18,12 @@ describe('catalog', () => {
     expect(php?.ppa).toBe('ondrej/php');
     expect(php?.installPackages[0]).toBe('php8.4-fpm');
     expect(php?.installPackages).toContain('php8.4-redis');
+  });
+
+  test('PHP 8.5 has no opcache package: it is built in', () => {
+    expect(findService('php8.4')?.installPackages).toContain('php8.4-opcache');
+    expect(findService('php8.5')?.installPackages).not.toContain('php8.5-opcache');
+    expect(findService('php8.5')?.installPackages).toContain('php8.5-redis');
   });
 });
 

@@ -1,7 +1,7 @@
 {
   "name": "@devkit/desktop",
   "productName": "DevKit",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Local development environment for Laravel and Angular in WSL.",
   "author": "y0unes",

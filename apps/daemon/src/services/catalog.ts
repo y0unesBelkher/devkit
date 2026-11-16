@@ -1,4 +1,5 @@
-import { PHP_VERSIONS, type LogSource, type ServiceInfo } from '@devkit/shared';
+import type { LogSource, ServiceInfo } from '@devkit/shared';
+import { compareVersions, phpReleases, type PhpRelease } from './php-versions.ts';
 
 export interface ServiceDefinition extends ServiceInfo {
   /** apt package whose presence means "installed" and whose version is shown. */
@@ -20,21 +21,28 @@ const PHP_BASE_EXTENSIONS = [
   'bcmath', 'intl', 'gd', 'redis', 'opcache', 'readline',
 ];
 
-const php = (version: string): ServiceDefinition => ({
+/** OPcache is compiled into PHP from 8.5 on and has no package of its own. */
+const baseExtensions = (version: string): string[] =>
+  compareVersions(version, '8.5') >= 0 ? PHP_BASE_EXTENSIONS.filter((ext) => ext !== 'opcache') : PHP_BASE_EXTENSIONS;
+
+const php = ({ version, preRelease }: PhpRelease): ServiceDefinition => ({
   id: `php${version}`,
-  name: `PHP ${version} FPM`,
+  name: `PHP ${version} FPM${preRelease ? ' (pre-release)' : ''}`,
   category: 'php',
-  description: `PHP ${version} FastCGI process manager with Laravel's usual extensions.`,
+  description: preRelease
+    ? `PHP ${version} is not released yet; only a test build is available. Not for daily work.`
+    : `PHP ${version} FastCGI process manager with Laravel's usual extensions.`,
   unit: `php${version}-fpm.service`,
   package: `php${version}-fpm`,
-  installPackages: [`php${version}-fpm`, ...PHP_BASE_EXTENSIONS.map((ext) => `php${version}-${ext}`)],
+  installPackages: [`php${version}-fpm`, ...baseExtensions(version).map((ext) => `php${version}-${ext}`)],
   removePackages: [`php${version}-fpm`],
   ppa: 'ondrej/php',
   logSources: [],
   logFiles: { fpm: { label: 'FPM log', path: `/var/log/php${version}-fpm.log` } },
 });
 
-const definitions: ServiceDefinition[] = [
+/** Everything but PHP, whose versions come from apt (see php-versions.ts). `__php__` marks where they go. */
+const definitions: (ServiceDefinition | '__php__')[] = [
   {
     id: 'nginx',
     name: 'nginx',
@@ -50,7 +58,7 @@ const definitions: ServiceDefinition[] = [
       access: { label: 'Access log', path: '/var/log/nginx/access.log' },
     },
   },
-  ...PHP_VERSIONS.map(php),
+  '__php__',
   {
     id: 'mysql',
     name: 'MySQL',
@@ -90,16 +98,19 @@ const definitions: ServiceDefinition[] = [
   },
 ];
 
-for (const def of definitions) {
+function withLogSources(def: ServiceDefinition): ServiceDefinition {
   const sources: LogSource[] = [{ id: 'journal', label: 'systemd journal' }];
   for (const [id, file] of Object.entries(def.logFiles)) sources.push({ id, label: file.label });
-  def.logSources = sources;
+  return { ...def, logSources: sources };
 }
 
-export const catalog: readonly ServiceDefinition[] = definitions;
+/** Every service DevKit manages, with one PHP-FPM entry per PHP version currently offered. */
+export function catalog(): ServiceDefinition[] {
+  return definitions.flatMap((def) => (def === '__php__' ? phpReleases().map(php) : [def])).map(withLogSources);
+}
 
 export function findService(id: string): ServiceDefinition | undefined {
-  return catalog.find((def) => def.id === id);
+  return catalog().find((def) => def.id === id);
 }
 
 export function toInfo(def: ServiceDefinition): ServiceInfo {

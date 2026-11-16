@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   DEV_SERVER_PORT_START,
-  PHP_VERSIONS,
   validateDomain,
   type CreateProcessRequest,
   type CreateSiteRequest,
@@ -36,6 +35,7 @@ import {
   writeListen,
   writeVhost,
 } from './nginx.ts';
+import { phpVersions } from '../services/php-versions.ts';
 import { syncPhpShim } from './php-shim.ts';
 import {
   LARAVEL_PROCESSES,
@@ -61,8 +61,8 @@ function exclusive<T>(work: () => Promise<T>): Promise<T> {
 }
 
 function requirePhpVersion(version: string | null | undefined): string {
-  if (!version || !(PHP_VERSIONS as readonly string[]).includes(version)) {
-    throw new HttpError(422, `Choose a PHP version (${PHP_VERSIONS.join(', ')})`);
+  if (!version || !phpVersions().includes(version)) {
+    throw new HttpError(422, `Choose a PHP version (${phpVersions().join(', ')})`);
   }
   return version;
 }
